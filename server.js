@@ -1,13 +1,14 @@
-require("dotenv").config();
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import connectDB from "./config/db.js";
 
-const express = require("express");
-const cors = require("cors");
+dotenv.config();
 
 const app = express();
 
 const PORT = process.env.PORT || 5000;
 
-// Middleware
 app.use(
   cors({
     origin: process.env.CLIENT_URL || "http://localhost:3000",
@@ -18,7 +19,6 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Health check
 app.get("/", (req, res) => {
   res.status(200).json({
     success: true,
@@ -26,7 +26,8 @@ app.get("/", (req, res) => {
   });
 });
 
-// Start server
+connectDB();
+
 app.listen(PORT, () => {
   console.log(`TripGuard API running on port ${PORT}`);
 });
