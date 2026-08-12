@@ -36,12 +36,60 @@ const bookingSchema = new mongoose.Schema(
       min: [1, "Total nights must be at least 1"],
     },
 
+    /*
+     * Original accommodation price.
+     *
+     * Example:
+     * ₦60,000 per night × 3 nights
+     * = ₦180,000
+     */
     pricePerNight: {
       type: Number,
       required: [true, "Price per night is required"],
       min: [0, "Price cannot be negative"],
     },
 
+    /*
+     * Total amount belonging to the accommodation
+     * before TripGuard's service fee.
+     *
+     * Example:
+     * ₦180,000
+     */
+    accommodationAmount: {
+      type: Number,
+      required: [true, "Accommodation amount is required"],
+      min: [0, "Accommodation amount cannot be negative"],
+    },
+
+    /*
+     * TripGuard service fee.
+     *
+     * Currently 10% of the accommodation amount.
+     *
+     * Example:
+     * ₦180,000 × 10% = ₦18,000
+     */
+    serviceFee: {
+      type: Number,
+      required: [true, "Service fee is required"],
+      min: [0, "Service fee cannot be negative"],
+      default: 0,
+    },
+
+    /*
+     * Final amount paid by the traveller.
+     *
+     * Example:
+     *
+     * Accommodation = ₦180,000
+     * Service fee   = ₦18,000
+     * -----------------------
+     * Total         = ₦198,000
+     *
+     * THIS is the amount that will be
+     * sent to the payment backend.
+     */
     totalAmount: {
       type: Number,
       required: [true, "Total booking amount is required"],
@@ -57,7 +105,13 @@ const bookingSchema = new mongoose.Schema(
 
     paymentStatus: {
       type: String,
-      enum: ["pending", "paid", "failed", "refunded", "partially_refunded"],
+      enum: [
+        "pending",
+        "paid",
+        "failed",
+        "refunded",
+        "partially_refunded",
+      ],
       default: "pending",
     },
 
@@ -145,4 +199,3 @@ const bookingSchema = new mongoose.Schema(
 const Booking = mongoose.model("Booking", bookingSchema);
 
 export default Booking;
-

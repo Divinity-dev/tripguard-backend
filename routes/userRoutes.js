@@ -5,6 +5,9 @@ import {
   updateProfile,
   changePassword,
   deleteAccount,
+  setupPaymentAccount,
+  getPaymentAccount,
+  updatePaymentAccount,
 } from "../controllers/userController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -21,7 +24,26 @@ router.put("/profile", updateProfile);
 // Password
 router.put("/change-password", changePassword);
 
-// Account
-router.delete("/account", deleteAccount);
+// Owner payment account
+router.post(
+  "/payment-account",
+  setupPaymentAccount
+);
 
-export default router
+router.get(
+  "/payment-account",
+  getPaymentAccount
+);
+
+router.put(
+  "/payment-account",
+  updatePaymentAccount
+);
+
+// Account
+router.delete(
+  "/account",
+  deleteAccount
+);
+
+export default router;
