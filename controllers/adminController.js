@@ -1,9 +1,9 @@
-import User from "../models/User.js";
-import Accommodation from "../models/Accommodation.js";
-import Booking from "../models/Booking.js";
-import Payment from "../models/Payment.js";
-import ContactMessage from "../models/ContactMessage.js";
-import Notification from "../models/Notification.js";
+import User from "../models/users.js";
+import Accommodation from "../models/accommodations.js";
+import Booking from "../models/bookings.js";
+import Payment from "../models/payments.js";
+import ContactMessage from "../models/contactmessages.js";
+import Notification from "../models/notifications.js";
 
 export const getDashboardStats = async (req, res) => {
   try {
@@ -479,6 +479,39 @@ export const getContactMessages = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Unable to retrieve contact messages",
+    });
+  }
+};
+
+export const getContactMessage = async (req, res) => {
+  try {
+    const message = await ContactMessage.findById(req.params.id)
+      .populate(
+        "assignedTo",
+        "firstName lastName email"
+      )
+      .populate(
+        "respondedBy",
+        "firstName lastName email"
+      );
+
+    if (!message) {
+      return res.status(404).json({
+        success: false,
+        message: "Contact message not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      contactMessage: message,
+    });
+  } catch (error) {
+    console.error("Get contact message error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Unable to retrieve contact message",
     });
   }
 };

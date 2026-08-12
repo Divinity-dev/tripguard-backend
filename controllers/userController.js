@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import User from "../models/User.js";
+import User from "../models/users.js";
 
 export const getProfile = async (req, res) => {
   try {

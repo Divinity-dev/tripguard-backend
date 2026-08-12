@@ -1,4 +1,4 @@
-import Notification from "../models/Notification.js";
+import Notification from "../models/notifications.js";
 
 export const getNotifications = async (req, res) => {
   try {
@@ -25,6 +25,36 @@ export const getNotifications = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Unable to retrieve notifications",
+    });
+  }
+};
+
+export const getNotification = async (req, res) => {
+  try {
+    const notification = await Notification.findOne({
+      _id: req.params.id,
+      recipient: req.user.id,
+    })
+      .populate("booking", "bookingReference bookingStatus")
+      .populate("accommodation", "name images");
+
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: "Notification not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      notification,
+    });
+  } catch (error) {
+    console.error("Get notification error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Unable to retrieve notification",
     });
   }
 };
