@@ -1,6 +1,8 @@
 import Booking from "../models/bookings.js";
 import Accommodation from "../models/accommodations.js";
 
+const TRIPGUARD_FEE_RATE = 10;
+
 export const createBooking = async (req, res) => {
   try {
     const {
@@ -12,7 +14,12 @@ export const createBooking = async (req, res) => {
       safetyContact,
     } = req.body;
 
-    if (!accommodation || !checkInDate || !checkOutDate || !guests) {
+    if (
+      !accommodation ||
+      !checkInDate ||
+      !checkOutDate ||
+      !guests
+    ) {
       return res.status(400).json({
         success: false,
         message:
@@ -49,291 +56,151 @@ export const createBooking = async (req, res) => {
     if (checkOut <= checkIn) {
       return res.status(400).json({
         success: false,
-        message: "Check-out date must be after check-in date",
+        message:
+          "Check-out date must be after check-in date",
       });
     }
 
-    if (guests < 1 || guests > property.maxGuests) {
+    if (
+      guests < 1 ||
+      guests > property.maxGuests
+    ) {
       return res.status(400).json({
         success: false,
         message: `This accommodation allows a maximum of ${property.maxGuests} guests`,
       });
     }
 
-    const millisecondsPerDay = 1000 * 60 * 60 * 24;
+    const millisecondsPerDay =
+      1000 * 60 * 60 * 24;
 
     const totalNights = Math.ceil(
-      (checkOut - checkIn) / millisecondsPerDay
+      (checkOut - checkIn) /
+        millisecondsPerDay
     );
 
-    const totalAmount = totalNights * property.pricePerNight;
+    /*
+     * --------------------------------------------------
+     * PAYMENT CALCULATION
+     * --------------------------------------------------
+     *
+     * Example:
+     *
+     * Accommodation = ₦180,000
+     * TripGuard 10% = ₦18,000
+     * Traveller pays = ₦198,000
+     */
+
+    const accommodationAmount =
+      totalNights *
+      property.pricePerNight;
+
+    const tripguardFee =
+      Math.round(
+        accommodationAmount *
+          (TRIPGUARD_FEE_RATE / 100) *
+          100
+      ) / 100;
+
+    const totalAmount =
+      accommodationAmount +
+      tripguardFee;
 
     // Prevent double booking.
-    const conflictingBooking = await Booking.findOne({
-      accommodation,
-      bookingStatus: {
-        $in: ["pending", "confirmed", "checked-in"],
-      },
-      checkInDate: {
-        $lt: checkOut,
-      },
-      checkOutDate: {
-        $gt: checkIn,
-      },
-    });
+    const conflictingBooking =
+      await Booking.findOne({
+        accommodation,
+        bookingStatus: {
+          $in: [
+            "pending",
+            "confirmed",
+            "checked-in",
+          ],
+        },
+        checkInDate: {
+          $lt: checkOut,
+        },
+        checkOutDate: {
+          $gt: checkIn,
+        },
+      });
 
     if (conflictingBooking) {
       return res.status(409).json({
         success: false,
-        message: "This accommodation is already booked for those dates",
+        message:
+          "This accommodation is already booked for those dates",
       });
     }
 
-    const bookingReference = `TG-${Date.now()}-${Math.floor(
-      1000 + Math.random() * 9000
-    )}`;
+    const bookingReference =
+      `TG-${Date.now()}-${Math.floor(
+        1000 + Math.random() * 9000
+      )}`;
 
-    const booking = await Booking.create({
-      guest: req.user.id,
-      accommodation,
-      checkInDate: checkIn,
-      checkOutDate: checkOut,
-      guests,
-      totalNights,
-      pricePerNight: property.pricePerNight,
-      totalAmount,
-      bookingReference,
-      specialRequests: specialRequests?.trim() || "",
-      safetyContact: safetyContact || {},
-    });
+    const booking =
+      await Booking.create({
+        guest: req.user.id,
 
-    const populatedBooking = await Booking.findById(booking._id).populate(
-      "accommodation",
-      "name images pricePerNight location checkInTime checkOutTime"
-    );
+        accommodation,
 
-    res.status(201).json({
+        checkInDate: checkIn,
+
+        checkOutDate: checkOut,
+
+        guests,
+
+        totalNights,
+
+        pricePerNight:
+          property.pricePerNight,
+
+        /*
+         * Financial breakdown
+         */
+        accommodationAmount,
+
+        tripguardFee,
+
+        /*
+         * Final amount paid by traveller
+         */
+        totalAmount,
+
+        bookingReference,
+
+        specialRequests:
+          specialRequests?.trim() || "",
+
+        safetyContact:
+          safetyContact || {},
+      });
+
+    const populatedBooking =
+      await Booking.findById(
+        booking._id
+      ).populate(
+        "accommodation",
+        "name images pricePerNight location checkInTime checkOutTime"
+      );
+
+    return res.status(201).json({
       success: true,
-      message: "Booking created successfully",
+      message:
+        "Booking created successfully",
+
       booking: populatedBooking,
     });
   } catch (error) {
-    console.error("Create booking error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Unable to create booking",
-    });
-  }
-};
-
-export const getMyBookings = async (req, res) => {
-  try {
-    const bookings = await Booking.find({
-      guest: req.user.id,
-    })
-      .populate(
-        "accommodation",
-        "name images location pricePerNight checkInTime checkOutTime"
-      )
-      .sort({ createdAt: -1 });
-
-    res.status(200).json({
-      success: true,
-      count: bookings.length,
-      bookings,
-    });
-  } catch (error) {
-    console.error("Get my bookings error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Unable to retrieve bookings",
-    });
-  }
-};
-
-export const getBooking = async (req, res) => {
-  try {
-    const booking = await Booking.findOne({
-      _id: req.params.id,
-      guest: req.user.id,
-    })
-      .populate(
-        "accommodation",
-        "name description type images pricePerNight location amenities checkInTime checkOutTime"
-      )
-      .populate("guest", "firstName lastName email phone");
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: "Booking not found",
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      booking,
-    });
-  } catch (error) {
-    console.error("Get booking error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Unable to retrieve booking",
-    });
-  }
-};
-
-export const cancelBooking = async (req, res) => {
-  try {
-    const { cancellationReason } = req.body;
-
-    const booking = await Booking.findOne({
-      _id: req.params.id,
-      guest: req.user.id,
-    });
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: "Booking not found",
-      });
-    }
-
-    if (
-      ["cancelled", "checked-out", "completed"].includes(
-        booking.bookingStatus
-      )
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "This booking can no longer be cancelled",
-      });
-    }
-
-    booking.bookingStatus = "cancelled";
-    booking.cancellationReason = cancellationReason?.trim() || "";
-    booking.cancelledAt = new Date();
-
-    await booking.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Booking cancelled successfully",
-      booking,
-    });
-  } catch (error) {
-    console.error("Cancel booking error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Unable to cancel booking",
-    });
-  }
-};
-
-export const getOwnerBookings = async (req, res) => {
-  try {
-    const accommodations = await Accommodation.find({
-      owner: req.user.id,
-    }).select("_id");
-
-    const accommodationIds = accommodations.map(
-      (accommodation) => accommodation._id
+    console.error(
+      "Create booking error:",
+      error
     );
 
-    const bookings = await Booking.find({
-      accommodation: {
-        $in: accommodationIds,
-      },
-    })
-      .populate("guest", "firstName lastName email phone")
-      .populate(
-        "accommodation",
-        "name images location pricePerNight"
-      )
-      .sort({ createdAt: -1 });
-
-    res.status(200).json({
-      success: true,
-      count: bookings.length,
-      bookings,
-    });
-  } catch (error) {
-    console.error("Get owner bookings error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Unable to retrieve owner bookings",
-    });
-  }
-};
-
-export const updateBookingStatus = async (req, res) => {
-  try {
-    const { status } = req.body;
-
-    const allowedStatuses = [
-      "confirmed",
-      "checked-in",
-      "checked-out",
-      "completed",
-      "cancelled",
-    ];
-
-    if (!allowedStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid booking status",
-      });
-    }
-
-    const accommodation = await Accommodation.findOne({
-      _id: req.body.accommodationId,
-      owner: req.user.id,
-    });
-
-    if (!accommodation) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to manage this booking",
-      });
-    }
-
-    const booking = await Booking.findOneAndUpdate(
-      {
-        _id: req.params.id,
-        accommodation: accommodation._id,
-      },
-      {
-        bookingStatus: status,
-      },
-      {
-        new: true,
-        runValidators: true,
-      }
-    );
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: "Booking not found",
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "Booking status updated successfully",
-      booking,
-    });
-  } catch (error) {
-    console.error("Update booking status error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Unable to update booking status",
+      message:
+        "Unable to create booking",
     });
   }
 }
