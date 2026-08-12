@@ -1,6 +1,6 @@
-import Review from "../models/Review.js";
-import Booking from "../models/Booking.js";
-import Accommodation from "../models/Accommodation.js";
+import Review from "../models/review.js";
+import Booking from "../models/bookings.js";
+import Accommodation from "../models/accommodations.js";
 
 export const createReview = async (req, res) => {
   try {
@@ -78,6 +78,34 @@ export const createReview = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Unable to create review",
+    });
+  }
+};
+
+export const getReview = async (req, res) => {
+  try {
+    const review = await Review.findOne({
+      _id: req.params.id,
+      user: req.user.id,
+    }).populate("accommodation", "name images location");
+
+    if (!review) {
+      return res.status(404).json({
+        success: false,
+        message: "Review not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      review,
+    });
+  } catch (error) {
+    console.error("Get review error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Unable to retrieve review",
     });
   }
 };
