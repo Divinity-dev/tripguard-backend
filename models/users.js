@@ -58,7 +58,9 @@ const userSchema = new mongoose.Schema(
     },
 
     /*
-     * Password reset / OTP fields
+     * --------------------------------------------------
+     * PASSWORD RESET / OTP
+     * --------------------------------------------------
      */
 
     passwordResetOtp: {
@@ -81,12 +83,6 @@ const userSchema = new mongoose.Schema(
      * --------------------------------------------------
      * PAYSTACK OWNER PAYMENT INFORMATION
      * --------------------------------------------------
-     *
-     * Only property owners will use these fields.
-     *
-     * TripGuard has one main Paystack account.
-     * Each property owner receives a Paystack
-     * subaccount for receiving their booking funds.
      */
 
     paystackSubaccountCode: {
@@ -102,8 +98,9 @@ const userSchema = new mongoose.Schema(
     },
 
     /*
-     * Bank information used when creating
-     * the owner's Paystack subaccount.
+     * --------------------------------------------------
+     * OWNER BANK INFORMATION
+     * --------------------------------------------------
      */
 
     paystackSettlementBank: {
@@ -125,17 +122,16 @@ const userSchema = new mongoose.Schema(
     },
 
     /*
-     * Indicates whether the owner has successfully
-     * completed payment setup.
+     * --------------------------------------------------
+     * PAYMENT SETUP STATUS
+     * --------------------------------------------------
      */
+
     paymentSetupCompleted: {
       type: Boolean,
       default: false,
     },
 
-    /*
-     * Tracks the owner's Paystack onboarding status.
-     */
     paymentSetupStatus: {
       type: String,
       enum: [
@@ -146,6 +142,12 @@ const userSchema = new mongoose.Schema(
       ],
       default: "not_started",
     },
+
+    /*
+     * --------------------------------------------------
+     * LOGIN INFORMATION
+     * --------------------------------------------------
+     */
 
     lastLogin: {
       type: Date,
@@ -158,11 +160,20 @@ const userSchema = new mongoose.Schema(
 );
 
 /*
- * Hash password before saving.
+ * --------------------------------------------------
+ * HASH PASSWORD BEFORE SAVING
+ * --------------------------------------------------
+ *
+ * This uses async/promise middleware.
+ *
+ * Do NOT use next() here.
  */
-userSchema.pre("save", async function (next) {
+userSchema.pre("save", async function () {
+  /*
+   * If password hasn't changed, don't hash it again.
+   */
   if (!this.isModified("password")) {
-    return next();
+    return;
   }
 
   const salt = await bcrypt.genSalt(10);
@@ -171,13 +182,14 @@ userSchema.pre("save", async function (next) {
     this.password,
     salt
   );
-
-  next();
 });
 
 /*
- * Compare password during login.
+ * --------------------------------------------------
+ * COMPARE PASSWORD
+ * --------------------------------------------------
  */
+
 userSchema.methods.comparePassword = async function (
   candidatePassword
 ) {

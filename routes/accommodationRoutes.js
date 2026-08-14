@@ -16,9 +16,8 @@ const router = express.Router();
 
 // Public traveller routes
 router.get("/", getAccommodations);
-router.get("/:id", getAccommodation);
 
-// Owner routes
+// Owner create accommodation
 router.post(
   "/",
   protect,
@@ -47,4 +46,7 @@ router.delete(
   deleteAccommodation
 );
 
-export default router
+// Dynamic route should come after specific routes
+router.get("/:id", getAccommodation);
+
+export default router;

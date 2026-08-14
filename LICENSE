@@ -19,3 +19,57 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+{
+  "success": true,
+  "message": "Account created successfully",
+  "user": {
+    "id": "6a7e1da4a38f7044c16d5bab",
+    "firstName": "Daniel",
+    "lastName": "Okafor",
+    "email": "traveller.test@tripguard.com",
+    "phone": "08031234567",
+    "role": "user",
+    "profileImage": "",
+    "isVerified": false,
+    "isActive": true
+    "password":"Test@123456"
+    eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhN2UxZGE0YTM4ZjcwNDRjMTZkNWJhYiIsImlhdCI6MTc4NjY1MTkxNiwiZXhwIjoxNzg2NjUxOTE2fQ.wOUjI456_o44Tssftlh50U9dfH58ElP6ywHn1h0q3p0
+  }
+}
+
+{
+  "success": true,
+  "message": "Account created successfully",
+  "user": {
+    "id": "6a7e1ea1a38f7044c16d5bac",
+    "firstName": "Michael",
+    "lastName": "Okafor",
+    "email": "michael.owner@tripguard.test",
+    "phone": "08031234567",
+    "role": "owner",
+    "profileImage": "",
+    "isVerified": false,
+    "isActive": true
+    "password":"Owner123456"
+    eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhN2UxZWExYTM4ZjcwNDRjMTZkNWJhYyIsImlhdCI6MTc4NjY1MjI1OCwiZXhwIjoxNzg2NjUyMjU4fQ.iWFoBQ74d1m2c3cbVAlZdzKN2GKjlLkDC8cWr7t4vdY
+  }
+}
+
+{
+  "success": true,
+  "message": "Account created successfully",
+  "user": {
+    "id": "6a7e1edda38f7044c16d5bad",
+    "firstName": "Sarah",
+    "lastName": "Williams",
+    "email": "sarah.admin@tripguard.test",
+    "phone": "08039876543",
+    "role": "user",
+    "profileImage": "",
+    "isVerified": false,
+    "isActive": true
+    "password":"Admin123456"
+    
+  }
+}

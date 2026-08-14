@@ -24,12 +24,18 @@ const sendTokenResponse = (user, statusCode, res, message) => {
     .cookie("token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      sameSite:
+        process.env.NODE_ENV === "production"
+          ? "none"
+          : "lax",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     })
     .json({
       success: true,
       message,
+
+      token,
+
       user: {
         id: user._id,
         firstName: user.firstName,
@@ -43,7 +49,7 @@ const sendTokenResponse = (user, statusCode, res, message) => {
       },
     });
 };
-
+//register
 export const register = async (req, res) => {
   try {
     const {
@@ -98,7 +104,7 @@ export const register = async (req, res) => {
     });
   }
 };
-
+//login
 export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
