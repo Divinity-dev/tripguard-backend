@@ -145,11 +145,52 @@ const accommodationSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    slug: {
+  type: String,
+  required: true,
+  unique: true,
+  lowercase: true,
+  trim: true,
+  index: true,
+},
   },
   {
     timestamps: true,
   }
 );
+
+
+// ===============================
+// INDEXES
+// ===============================
+
+accommodationSchema.index({
+  status: 1,
+  isAvailable: 1,
+});
+
+accommodationSchema.index({
+  "location.state": 1,
+  "location.city": 1,
+  "location.lga": 1,
+});
+
+accommodationSchema.index({
+  type: 1,
+});
+
+accommodationSchema.index({
+  pricePerNight: 1,
+});
+
+accommodationSchema.index({
+  averageRating: -1,
+});
+
+accommodationSchema.index({
+  createdAt: -1,
+});
+
 
 const Accommodation = mongoose.model(
   "Accommodation",

@@ -1,5 +1,37 @@
 import Accommodation from "../models/accommodations.js";
 
+const generateSlug = (name) => {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+};
+
+const generateUniqueSlug = async (name, accommodationId = null) => {
+  const baseSlug = generateSlug(name);
+
+  let slug = baseSlug;
+  let counter = 2;
+
+  while (true) {
+    const existingAccommodation = await Accommodation.findOne({
+      slug,
+      ...(accommodationId
+        ? { _id: { $ne: accommodationId } }
+        : {}),
+    });
+
+    if (!existingAccommodation) {
+      return slug;
+    }
+
+    slug = `${baseSlug}-${counter}`;
+    counter++;
+  }
+};
+
 export const createAccommodation = async (req, res) => {
   try {
     const {
@@ -36,22 +68,25 @@ export const createAccommodation = async (req, res) => {
       });
     }
 
-    const accommodation = await Accommodation.create({
-      owner: req.user.id,
-      name: name.trim(),
-      description: description.trim(),
-      type,
-      images,
-      pricePerNight,
-      location,
-      amenities: amenities || [],
-      bedrooms,
-      bathrooms,
-      maxGuests,
-      checkInTime,
-      checkOutTime,
-      propertyWebsite: propertyWebsite?.trim() || "",
-    });
+   const slug = await generateUniqueSlug(name);
+
+const accommodation = await Accommodation.create({
+  owner: req.user.id,
+  name: name.trim(),
+  slug,
+  description: description.trim(),
+  type,
+  images,
+  pricePerNight,
+  location,
+  amenities: amenities || [],
+  bedrooms,
+  bathrooms,
+  maxGuests,
+  checkInTime,
+  checkOutTime,
+  propertyWebsite: propertyWebsite?.trim() || "",
+});
 
     res.status(201).json({
       success: true,
@@ -71,47 +106,68 @@ export const createAccommodation = async (req, res) => {
 export const getAccommodations = async (req, res) => {
   try {
     const {
-      state,
-      city,
-      lga,
-      type,
-      minPrice,
-      maxPrice,
-      guests,
-      bedrooms,
-      status,
-    } = req.query;
+  search,
+  state,
+  city,
+  lga,
+  type,
+  minPrice,
+  maxPrice,
+  guests,
+  bedrooms,
+  page = 1,
+  limit = 12,
+  sort = "recommended",
+} = req.query;
 
     const filter = {
-      status: status || "approved",
+      status: "approved",
       isAvailable: true,
     };
 
+    if (search?.trim()) {
+  const searchRegex = {
+    $regex: search.trim(),
+    $options: "i",
+  };
+
+  filter.$or = [
+    { name: searchRegex },
+    { "location.state": searchRegex },
+    { "location.city": searchRegex },
+    { "location.lga": searchRegex },
+    { type: searchRegex },
+  ];
+}
+
+    // LOCATION
     if (state) {
       filter["location.state"] = {
-        $regex: state,
+        $regex: state.trim(),
         $options: "i",
       };
     }
 
     if (city) {
       filter["location.city"] = {
-        $regex: city,
+        $regex: city.trim(),
         $options: "i",
       };
     }
 
     if (lga) {
       filter["location.lga"] = {
-        $regex: lga,
+        $regex: lga.trim(),
         $options: "i",
       };
     }
 
+    // ACCOMMODATION TYPE
     if (type) {
       filter.type = type;
     }
 
+    // PRICE
     if (minPrice || maxPrice) {
       filter.pricePerNight = {};
 
@@ -124,26 +180,68 @@ export const getAccommodations = async (req, res) => {
       }
     }
 
+    // GUESTS
     if (guests) {
       filter.maxGuests = {
         $gte: Number(guests),
       };
     }
 
+    // BEDROOMS
     if (bedrooms) {
       filter.bedrooms = {
         $gte: Number(bedrooms),
       };
     }
 
+    // PAGINATION
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const itemsPerPage = Math.min(
+      Math.max(Number(limit) || 12, 1),
+      50
+    );
+
+    const skip = (currentPage - 1) * itemsPerPage;
+
+    // SORTING
+    let sortOption = { createdAt: -1 };
+
+    if (sort === "price-low") {
+      sortOption = { pricePerNight: 1 };
+    }
+
+    if (sort === "price-high") {
+      sortOption = { pricePerNight: -1 };
+    }
+
+    if (sort === "rating") {
+      sortOption = { averageRating: -1 };
+    }
+
+    // TOTAL COUNT
+    const total = await Accommodation.countDocuments(filter);
+
+    // ACCOMMODATIONS
     const accommodations = await Accommodation.find(filter)
       .populate("owner", "firstName lastName profileImage")
-      .sort({ createdAt: -1 });
+      .sort(sortOption)
+      .skip(skip)
+      .limit(itemsPerPage);
+
+    const totalPages = Math.ceil(total / itemsPerPage);
 
     res.status(200).json({
       success: true,
       count: accommodations.length,
       accommodations,
+      pagination: {
+        page: currentPage,
+        limit: itemsPerPage,
+        total,
+        totalPages,
+        hasNextPage: currentPage < totalPages,
+        hasPreviousPage: currentPage > 1,
+      },
     });
   } catch (error) {
     console.error("Get accommodations error:", error);
@@ -157,8 +255,10 @@ export const getAccommodations = async (req, res) => {
 
 export const getAccommodation = async (req, res) => {
   try {
+    const { slug } = req.params;
+
     const accommodation = await Accommodation.findOne({
-      _id: req.params.id,
+      slug: slug.toLowerCase(),
       status: "approved",
     }).populate(
       "owner",
@@ -206,7 +306,6 @@ export const getOwnerAccommodations = async (req, res) => {
     });
   }
 };
-
 export const updateAccommodation = async (req, res) => {
   try {
     const accommodation = await Accommodation.findOne({
@@ -220,6 +319,8 @@ export const updateAccommodation = async (req, res) => {
         message: "Accommodation not found or you are not the owner",
       });
     }
+
+    const oldName = accommodation.name;
 
     const allowedFields = [
       "name",
@@ -244,6 +345,17 @@ export const updateAccommodation = async (req, res) => {
       }
     });
 
+    // Generate a new unique slug only when the name changes
+    if (
+      req.body.name !== undefined &&
+      req.body.name.trim() !== oldName
+    ) {
+      accommodation.slug = await generateUniqueSlug(
+        req.body.name,
+        accommodation._id
+      );
+    }
+
     // Any substantive owner update should go back through admin review.
     accommodation.status = "pending";
 
@@ -256,6 +368,13 @@ export const updateAccommodation = async (req, res) => {
     });
   } catch (error) {
     console.error("Update accommodation error:", error);
+
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "An accommodation with this name already exists",
+      });
+    }
 
     res.status(500).json({
       success: false,

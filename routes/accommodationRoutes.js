@@ -25,6 +25,7 @@ router.post(
   createAccommodation
 );
 
+// Owner's accommodations
 router.get(
   "/owner/my-accommodations",
   protect,
@@ -32,6 +33,10 @@ router.get(
   getOwnerAccommodations
 );
 
+// Get accommodation by slug
+router.get("/:slug", getAccommodation);
+
+// Owner update accommodation
 router.put(
   "/:id",
   protect,
@@ -39,14 +44,12 @@ router.put(
   updateAccommodation
 );
 
+// Owner delete accommodation
 router.delete(
   "/:id",
   protect,
   authorizeRoles("owner"),
   deleteAccommodation
 );
-
-// Dynamic route should come after specific routes
-router.get("/:id", getAccommodation);
 
 export default router;

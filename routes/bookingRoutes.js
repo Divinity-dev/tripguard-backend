@@ -6,6 +6,8 @@ import {
   getBooking,
   cancelBooking,
   updateBookingStatus,
+  checkInBooking,
+  checkOutBooking,
 } from "../controllers/bookingController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -31,6 +33,20 @@ router.put(
   "/:id/cancel",
   authorizeRoles("user"),
   cancelBooking
+);
+
+// Traveller protection routes
+
+router.put(
+  "/:id/check-in",
+  authorizeRoles("user"),
+  checkInBooking
+);
+
+router.put(
+  "/:id/check-out",
+  authorizeRoles("user"),
+  checkOutBooking
 );
 
 // Owner route

@@ -162,6 +162,16 @@ const bookingSchema = new mongoose.Schema(
         trim: true,
       },
 
+      protectionCheckInAt: {
+  type: Date,
+  default: null,
+},
+
+protectionCheckOutAt: {
+  type: Date,
+  default: null,
+},
+
       email: {
         type: String,
         lowercase: true,

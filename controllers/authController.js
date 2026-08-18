@@ -34,8 +34,6 @@ const sendTokenResponse = (user, statusCode, res, message) => {
       success: true,
       message,
 
-      token,
-
       user: {
         id: user._id,
         firstName: user.firstName,
@@ -244,21 +242,19 @@ export const forgotPassword = async (req, res) => {
     );
 
     // Don't reveal whether an account exists.
-    if (!user) {
-      return res.status(200).json({
-        success: true,
-        message:
-          "If an account with that email exists, a password reset OTP has been sent.",
-      });
-    }
+   if (!user) {
+  return res.status(404).json({
+    success: false,
+    message: "No TripGuard account was found with this email address.",
+  });
+}
 
-    if (!user.isActive) {
-      return res.status(200).json({
-        success: true,
-        message:
-          "If an account with that email exists, a password reset OTP has been sent.",
-      });
-    }
+   if (!user.isActive) {
+  return res.status(403).json({
+    success: false,
+    message: "This TripGuard account has been deactivated.",
+  });
+}
 
     // Generate a 6-digit OTP
     const otp = crypto.randomInt(100000, 1000000).toString();
