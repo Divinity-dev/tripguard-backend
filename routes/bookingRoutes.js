@@ -3,6 +3,7 @@ import express from "express";
 import {
   createBooking,
   getMyBookings,
+  getOwnerBookings,
   getBooking,
   cancelBooking,
   updateBookingStatus,
@@ -22,6 +23,12 @@ router.use(protect);
 router.post("/", authorizeRoles("user"), createBooking);
 
 router.get(
+  "/owner/my-bookings",
+  authorizeRoles("owner"),
+  getOwnerBookings
+);
+
+router.get(
   "/my-bookings",
   authorizeRoles("user"),
   getMyBookings
@@ -31,7 +38,7 @@ router.get("/:id", getBooking);
 
 router.put(
   "/:id/cancel",
-  authorizeRoles("user"),
+  authorizeRoles("user", "owner"),
   cancelBooking
 );
 

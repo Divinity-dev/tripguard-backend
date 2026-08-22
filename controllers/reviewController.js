@@ -170,6 +170,89 @@ export const getMyReviews = async (req, res) => {
   }
 };
 
+export const getOwnerReviews = async (req, res) => {
+  try {
+    // Find all accommodations belonging to the logged-in owner
+    const accommodations = await Accommodation.find({
+      owner: req.user.id,
+    }).select("_id name images location averageRating totalReviews");
+
+    const accommodationIds = accommodations.map(
+      (accommodation) => accommodation._id
+    );
+
+    // Find reviews belonging only to those accommodations
+    const reviews = await Review.find({
+      accommodation: {
+        $in: accommodationIds,
+      },
+    })
+      .populate(
+        "user",
+        "firstName lastName profileImage"
+      )
+      .populate(
+        "accommodation",
+        "name images location averageRating totalReviews"
+      )
+      .populate(
+        "booking",
+        "bookingReference checkInDate checkOutDate"
+      )
+      .sort({
+        createdAt: -1,
+      });
+
+    // Rating distribution
+    const ratingDistribution = {
+      5: 0,
+      4: 0,
+      3: 0,
+      2: 0,
+      1: 0,
+    };
+
+    let totalRating = 0;
+
+    reviews.forEach((review) => {
+      totalRating += review.rating;
+
+      if (ratingDistribution[review.rating] !== undefined) {
+        ratingDistribution[review.rating]++;
+      }
+    });
+
+    const totalReviews = reviews.length;
+
+    const averageRating =
+      totalReviews > 0
+        ? Number((totalRating / totalReviews).toFixed(1))
+        : 0;
+
+    res.status(200).json({
+      success: true,
+
+      stats: {
+        totalReviews,
+        averageRating,
+        ratingDistribution,
+        totalProperties: accommodations.length,
+      },
+
+      properties: accommodations,
+
+      reviews,
+    });
+  } catch (error) {
+    console.error("Get owner reviews error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Unable to retrieve owner reviews",
+    });
+  }
+};
+
 export const updateReview = async (req, res) => {
   try {
     const {

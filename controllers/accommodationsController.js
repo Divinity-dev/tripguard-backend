@@ -90,7 +90,7 @@ const accommodation = await Accommodation.create({
 
     res.status(201).json({
       success: true,
-      message: "Accommodation submitted successfully",
+      message: "Accommodation created successfully",
       accommodation,
     });
   } catch (error) {
@@ -259,7 +259,7 @@ export const getAccommodation = async (req, res) => {
 
     const accommodation = await Accommodation.findOne({
       slug: slug.toLowerCase(),
-      status: "approved",
+       isAvailable: true,
     }).populate(
       "owner",
       "firstName lastName profileImage email phone"
@@ -355,15 +355,11 @@ export const updateAccommodation = async (req, res) => {
         accommodation._id
       );
     }
-
-    // Any substantive owner update should go back through admin review.
-    accommodation.status = "pending";
-
     await accommodation.save();
 
     res.status(200).json({
       success: true,
-      message: "Accommodation updated and submitted for review",
+      message: "Accommodation updated successfully",
       accommodation,
     });
   } catch (error) {
@@ -461,3 +457,31 @@ export const updateAccommodationAvailability = async (req, res) => {
     });
   }
 }
+
+export const getOwnerAccommodation = async (req, res) => {
+  try {
+    const accommodation = await Accommodation.findOne({
+      _id: req.params.id,
+      owner: req.user.id,
+    });
+
+    if (!accommodation) {
+      return res.status(404).json({
+        success: false,
+        message: "Accommodation not found or you are not the owner",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      accommodation,
+    });
+  } catch (error) {
+    console.error("Get owner accommodation error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Unable to retrieve your accommodation",
+    });
+  }
+};

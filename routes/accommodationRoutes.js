@@ -4,9 +4,10 @@ import {
   createAccommodation,
   getAccommodations,
   getAccommodation,
+  getOwnerAccommodations,
+  getOwnerAccommodation,
   updateAccommodation,
   deleteAccommodation,
-  getOwnerAccommodations,
 } from "../controllers/accommodationsController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -33,6 +34,14 @@ router.get(
   getOwnerAccommodations
 );
 
+// Get one accommodation belonging to the logged-in owner
+router.get(
+  "/owner/:id",
+  protect,
+  authorizeRoles("owner"),
+  getOwnerAccommodation
+);
+
 // Get accommodation by slug
 router.get("/:slug", getAccommodation);
 
@@ -51,5 +60,6 @@ router.delete(
   authorizeRoles("owner"),
   deleteAccommodation
 );
+
 
 export default router;

@@ -2,17 +2,17 @@ import crypto from "crypto";
 
 import Payment from "../models/payments.js";
 import Booking from "../models/bookings.js";
-import Notification from "../models/notifications.js";
 import User from "../models/users.js";
+import createNotification from "../utils/createNotification.js";
 
 const PAYSTACK_BASE_URL = "https://api.paystack.co";
 
 const TRIPGUARD_COMMISSION_RATE = 10;
 
 /*
- * --------------------------------------------------
+ * ==================================================
  * PAYSTACK HELPERS
- * --------------------------------------------------
+ * ==================================================
  */
 
 const getPaystackHeaders = () => ({
@@ -27,44 +27,51 @@ const generateReference = () => {
 };
 
 /*
- * --------------------------------------------------
+ * ==================================================
  * CALCULATE TRIPGUARD COMMISSION
- * --------------------------------------------------
+ * ==================================================
+ *
+ * The booking total already includes TripGuard's
+ * 10% commission.
  *
  * Example:
  *
- * Booking amount = ₦100,000
- * TripGuard = ₦10,000
- * Owner = ₦90,000
+ * Accommodation price = ₦85,000
+ * TripGuard commission = ₦8,500
+ * Customer pays = ₦93,500
+ *
+ * Therefore:
+ *
+ * ownerAmount = customerAmount / 1.10
  */
 
-const calculatePaymentSplit = (amount) => {
-  const commissionAmount =
-    Math.round(
-      amount *
-        (TRIPGUARD_COMMISSION_RATE / 100) *
-        100
-    ) / 100;
+const calculatePaymentSplit = (customerAmount) => {
+  const normalizedCustomerAmount =
+    Math.round(Number(customerAmount) * 100) / 100;
 
   const ownerAmount =
     Math.round(
-      (amount - commissionAmount) * 100
+      (normalizedCustomerAmount /
+        (1 + TRIPGUARD_COMMISSION_RATE / 100)) *
+        100
+    ) / 100;
+
+  const commissionAmount =
+    Math.round(
+      (normalizedCustomerAmount - ownerAmount) * 100
     ) / 100;
 
   return {
-    commissionRate:
-      TRIPGUARD_COMMISSION_RATE,
-
+    commissionRate: TRIPGUARD_COMMISSION_RATE,
     commissionAmount,
-
     ownerAmount,
   };
 };
 
 /*
- * --------------------------------------------------
+ * ==================================================
  * MARK PAYMENT SUCCESSFUL
- * --------------------------------------------------
+ * ==================================================
  */
 
 const markPaymentSuccessful = async (
@@ -81,8 +88,7 @@ const markPaymentSuccessful = async (
   payment.status = "successful";
 
   payment.paystackReference =
-    paystackData.reference ||
-    payment.reference;
+    paystackData.reference || payment.reference;
 
   payment.paystackTransactionId =
     paystackData.id?.toString() || "";
@@ -110,9 +116,9 @@ const markPaymentSuccessful = async (
   await payment.save();
 
   /*
-   * --------------------------------------------------
+   * ==================================================
    * UPDATE BOOKING
-   * --------------------------------------------------
+   * ==================================================
    */
 
   const booking = await Booking.findById(
@@ -128,65 +134,87 @@ const markPaymentSuccessful = async (
     booking.paymentDate =
       payment.paidAt;
 
+    /*
+     * Do not change a cancelled booking
+     * back to confirmed.
+     */
     if (
-      booking.bookingStatus !==
-      "cancelled"
+      booking.bookingStatus !== "cancelled"
     ) {
-      booking.bookingStatus =
-        "confirmed";
+      booking.bookingStatus = "confirmed";
     }
 
     await booking.save();
   }
 
   /*
-   * --------------------------------------------------
+   * ==================================================
    * NOTIFY TRAVELLER
-   * --------------------------------------------------
+   * ==================================================
+   *
+   * This is intentionally wrapped separately from
+   * the owner notification.
+   *
+   * If traveller notification fails, the owner
+   * notification should still be attempted.
    */
 
   try {
-    await Notification.create({
-      user: payment.user,
+    if (payment.user) {
+      await createNotification({
+        recipient: payment.user,
 
-      title: "Payment successful",
+        type: "payment",
 
-      message: `Your payment for booking ${payment.reference} was successful.`,
+        title: "Payment successful",
 
-      type: "payment",
+        message: `Your payment for booking ${payment.reference} was successful.`,
 
-      read: false,
-    });
+        booking: payment.booking,
+
+        accommodation: payment.property,
+
+        priority: "normal",
+
+        actionUrl: `/traveller/bookings/${payment.booking}`,
+      });
+    }
   } catch (notificationError) {
     console.error(
-      "Traveller notification error:",
+      "Traveller payment notification error:",
       notificationError
     );
   }
 
   /*
-   * --------------------------------------------------
+   * ==================================================
    * NOTIFY PROPERTY OWNER
-   * --------------------------------------------------
+   * ==================================================
    */
 
   try {
     if (payment.owner) {
-      await Notification.create({
-        user: payment.owner,
-
-        title: "New booking payment",
-
-        message: `A traveller has successfully paid for booking ${payment.reference}.`,
+      await createNotification({
+        recipient: payment.owner,
 
         type: "payment",
 
-        read: false,
+        title: "Payment received",
+
+        message: `A traveller has successfully paid for booking ${payment.reference}.`,
+
+        booking: payment.booking,
+
+        accommodation: payment.property,
+
+        priority: "high",
+
+        actionUrl: `/owner/bookings/${payment.booking}`,
       });
     }
   } catch (notificationError) {
     console.error(
-      "Owner notification error:",
+      "Owner payment notification error:",
       notificationError
     );
   }
@@ -216,23 +244,17 @@ export const getPaystackBanks = async (
     if (!process.env.PAYSTACK_SECRET_KEY) {
       return res.status(500).json({
         success: false,
-        message:
-          "Paystack is not configured",
+        message: "Paystack is not configured",
       });
     }
 
-   
-
-    const paystackResponse =
-      await fetch(
-        `${PAYSTACK_BASE_URL}/bank?country=nigeria&perPage=100`,
-        {
-          method: "GET",
-
-          headers:
-            getPaystackHeaders(),
-        }
-      );
+    const paystackResponse = await fetch(
+      `${PAYSTACK_BASE_URL}/bank?country=nigeria&perPage=100`,
+      {
+        method: "GET",
+        headers: getPaystackHeaders(),
+      }
+    );
 
     const paystackData =
       await paystackResponse.json();
@@ -254,35 +276,22 @@ export const getPaystackBanks = async (
       });
     }
 
-    const banks = (
-      paystackData.data || []
-    )
-      .filter(
-        (bank) => bank.active
-      )
+    const banks = (paystackData.data || [])
+      .filter((bank) => bank.active)
       .map((bank) => ({
         id: bank.id,
-
         name: bank.name,
-
         code: bank.code,
-
-        longcode:
-          bank.longcode,
-
+        longcode: bank.longcode,
         slug: bank.slug,
       }))
       .sort((a, b) =>
-        a.name.localeCompare(
-          b.name
-        )
+        a.name.localeCompare(b.name)
       );
 
     return res.status(200).json({
       success: true,
-
       count: banks.length,
-
       banks,
     });
   } catch (error) {
@@ -325,32 +334,22 @@ export const getOwnerPaymentSetup = async (
 
       paymentSetup: {
         completed:
-          req.user
-            .paymentSetupCompleted,
+          req.user.paymentSetupCompleted,
 
         status:
-          req.user
-            .paymentSetupStatus,
+          req.user.paymentSetupStatus,
 
         bank:
-          req.user
-            .paystackSettlementBank ||
-          "",
+          req.user.paystackSettlementBank || "",
 
         accountNumber:
-          req.user
-            .paystackSettlementAccount ||
-          "",
+          req.user.paystackSettlementAccount || "",
 
         accountName:
-          req.user
-            .paystackSettlementAccountName ||
-          "",
+          req.user.paystackSettlementAccountName || "",
 
         subaccountCode:
-          req.user
-            .paystackSubaccountCode ||
-          "",
+          req.user.paystackSubaccountCode || "",
       },
     });
   } catch (error) {
@@ -380,14 +379,6 @@ export const getOwnerPaymentSetup = async (
  *   bankCode: "058",
  *   accountNumber: "0123456789"
  * }
- *
- * Flow:
- *
- * 1. Validate owner.
- * 2. Validate account number.
- * 3. Resolve account with Paystack.
- * 4. Create Paystack subaccount.
- * 5. Save subaccount against owner.
  */
 
 export const setupOwnerPayment = async (
@@ -398,14 +389,13 @@ export const setupOwnerPayment = async (
     if (!process.env.PAYSTACK_SECRET_KEY) {
       return res.status(500).json({
         success: false,
-        message:
-          "Paystack is not configured",
+        message: "Paystack is not configured",
       });
     }
 
     /*
-     * Only property owners can
-     * connect payment accounts.
+     * Only property owners can connect
+     * payment accounts.
      */
     if (req.user.role !== "owner") {
       return res.status(403).json({
@@ -435,14 +425,10 @@ export const setupOwnerPayment = async (
      * Normalize account number.
      */
     const normalizedAccountNumber =
-      String(accountNumber).replace(
-        /\D/g,
-        ""
-      );
+      String(accountNumber).replace(/\D/g, "");
 
     if (
-      normalizedAccountNumber.length !==
-      10
+      normalizedAccountNumber.length !== 10
     ) {
       return res.status(400).json({
         success: false,
@@ -455,28 +441,22 @@ export const setupOwnerPayment = async (
       String(bankCode).trim();
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * RESOLVE BANK ACCOUNT
-     * --------------------------------------------------
-     *
-     * This confirms the account exists
-     * and gives us the account holder name.
+     * ==================================================
      */
 
-    const resolveResponse =
-      await fetch(
-        `${PAYSTACK_BASE_URL}/bank/resolve?account_number=${encodeURIComponent(
-          normalizedAccountNumber
-        )}&bank_code=${encodeURIComponent(
-          normalizedBankCode
-        )}`,
-        {
-          method: "GET",
-
-          headers:
-            getPaystackHeaders(),
-        }
-      );
+    const resolveResponse = await fetch(
+      `${PAYSTACK_BASE_URL}/bank/resolve?account_number=${encodeURIComponent(
+        normalizedAccountNumber
+      )}&bank_code=${encodeURIComponent(
+        normalizedBankCode
+      )}`,
+      {
+        method: "GET",
+        headers: getPaystackHeaders(),
+      }
+    );
 
     const resolveData =
       await resolveResponse.json();
@@ -503,66 +483,57 @@ export const setupOwnerPayment = async (
       resolveData.data.account_name;
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * EXISTING SUBACCOUNT
-     * --------------------------------------------------
-     *
-     * If the owner already has a Paystack
-     * subaccount, update it instead of
-     * creating another one.
+     * ==================================================
      */
 
-    if (
-      req.user.paystackSubaccountCode
-    ) {
-      const updateResponse =
-        await fetch(
-          `${PAYSTACK_BASE_URL}/subaccount/${encodeURIComponent(
-            req.user.paystackSubaccountCode
-          )}`,
-          {
-            method: "PUT",
+    if (req.user.paystackSubaccountCode) {
+      const updateResponse = await fetch(
+        `${PAYSTACK_BASE_URL}/subaccount/${encodeURIComponent(
+          req.user.paystackSubaccountCode
+        )}`,
+        {
+          method: "PUT",
 
-            headers:
-              getPaystackHeaders(),
+          headers: getPaystackHeaders(),
 
-            body: JSON.stringify({
-              business_name:
-                `${req.user.firstName} ${req.user.lastName}`,
+          body: JSON.stringify({
+            business_name:
+              `${req.user.firstName} ${req.user.lastName}`,
 
-              description:
-                `TripGuard property owner account for ${req.user.firstName} ${req.user.lastName}`,
+            description:
+              `TripGuard property owner account for ${req.user.firstName} ${req.user.lastName}`,
 
-              bank_code:
-                normalizedBankCode,
+            bank_code:
+              normalizedBankCode,
 
-              account_number:
-                normalizedAccountNumber,
+            account_number:
+              normalizedAccountNumber,
 
-              percentage_charge: 0,
+            percentage_charge: 0,
 
-              primary_contact_email:
-                req.user.email,
+            primary_contact_email:
+              req.user.email,
 
-              primary_contact_name:
-                `${req.user.firstName} ${req.user.lastName}`,
+            primary_contact_name:
+              `${req.user.firstName} ${req.user.lastName}`,
 
-              primary_contact_phone:
-                req.user.phone || "",
+            primary_contact_phone:
+              req.user.phone || "",
 
-              active: true,
+            active: true,
 
-              metadata:
-                JSON.stringify({
-                  ownerId:
-                    req.user._id.toString(),
+            metadata:
+              JSON.stringify({
+                ownerId:
+                  req.user._id.toString(),
 
-                  platform:
-                    "TripGuard",
-                }),
-            }),
-          }
-        );
+                platform: "TripGuard",
+              }),
+          }),
+        }
+      );
 
       const updateData =
         await updateResponse.json();
@@ -594,18 +565,15 @@ export const setupOwnerPayment = async (
         updateData.data;
 
       req.user.paystackSettlementBank =
-        updatedSubaccount
-          .settlement_bank ||
+        updatedSubaccount.settlement_bank ||
         "";
 
       req.user.paystackSettlementAccount =
-        updatedSubaccount
-          .account_number ||
+        updatedSubaccount.account_number ||
         normalizedAccountNumber;
 
       req.user.paystackSettlementAccountName =
-        updatedSubaccount
-          .account_name ||
+        updatedSubaccount.account_name ||
         accountName ||
         "";
 
@@ -629,28 +597,24 @@ export const setupOwnerPayment = async (
           status: "completed",
 
           subaccountCode:
-            req.user
-              .paystackSubaccountCode,
+            req.user.paystackSubaccountCode,
 
           bank:
-            req.user
-              .paystackSettlementBank,
+            req.user.paystackSettlementBank,
 
           accountNumber:
-            req.user
-              .paystackSettlementAccount,
+            req.user.paystackSettlementAccount,
 
           accountName:
-            req.user
-              .paystackSettlementAccountName,
+            req.user.paystackSettlementAccountName,
         },
       });
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * CREATE NEW SUBACCOUNT
-     * --------------------------------------------------
+     * ==================================================
      */
 
     req.user.paymentSetupStatus =
@@ -677,14 +641,6 @@ export const setupOwnerPayment = async (
             account_number:
               normalizedAccountNumber,
 
-            /*
-             * We don't use Paystack's
-             * percentage split.
-             *
-             * TripGuard's 10% commission
-             * is calculated per booking
-             * through transaction_charge.
-             */
             percentage_charge: 0,
 
             description:
@@ -704,8 +660,7 @@ export const setupOwnerPayment = async (
                 ownerId:
                   req.user._id.toString(),
 
-                platform:
-                  "TripGuard",
+                platform: "TripGuard",
               }),
           }),
         }
@@ -741,14 +696,13 @@ export const setupOwnerPayment = async (
       subaccountData.data;
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * SAVE SUBACCOUNT INFORMATION
-     * --------------------------------------------------
+     * ==================================================
      */
 
     req.user.paystackSubaccountCode =
-      subaccount.subaccount_code ||
-      "";
+      subaccount.subaccount_code || "";
 
     req.user.paystackSubaccountId =
       subaccount.id
@@ -756,8 +710,7 @@ export const setupOwnerPayment = async (
         : "";
 
     req.user.paystackSettlementBank =
-      subaccount.settlement_bank ||
-      "";
+      subaccount.settlement_bank || "";
 
     req.user.paystackSettlementAccount =
       subaccount.account_number ||
@@ -788,20 +741,16 @@ export const setupOwnerPayment = async (
         status: "completed",
 
         subaccountCode:
-          req.user
-            .paystackSubaccountCode,
+          req.user.paystackSubaccountCode,
 
         bank:
-          req.user
-            .paystackSettlementBank,
+          req.user.paystackSettlementBank,
 
         accountNumber:
-          req.user
-            .paystackSettlementAccount,
+          req.user.paystackSettlementAccount,
 
         accountName:
-          req.user
-            .paystackSettlementAccountName,
+          req.user.paystackSettlementAccountName,
       },
     });
   } catch (error) {
@@ -845,82 +794,113 @@ export const setupOwnerPayment = async (
  *
  * Example:
  *
- * Booking       ₦100,000
- * TripGuard     ₦10,000
- * Owner         ₦90,000
- *
- * Paystack handles the transaction split.
+ * Accommodation price = ₦85,000
+ * TripGuard = ₦8,500
+ * Customer pays = ₦93,500
+ * Owner receives = ₦85,000
  */
-export const initializePayment = async (req, res) => {
+
+export const initializePayment = async (
+  req,
+  res
+) => {
   try {
-    console.log("\n========================================");
-    console.log("TRIPGUARD PAYMENT INITIALIZATION");
-    console.log("========================================");
+    console.log(
+      "\n========================================"
+    );
+
+    console.log(
+      "TRIPGUARD PAYMENT INITIALIZATION"
+    );
+
+    console.log(
+      "========================================"
+    );
 
     const { bookingId } = req.body;
 
-    console.log("Booking ID:", bookingId);
-    console.log("User ID:", req.user?.id);
+    console.log(
+      "Booking ID:",
+      bookingId
+    );
+
+    console.log(
+      "User ID:",
+      req.user?.id
+    );
 
     if (!bookingId) {
       return res.status(400).json({
         success: false,
-        message: "Booking ID is required",
+        message:
+          "Booking ID is required",
       });
     }
 
     if (!process.env.PAYSTACK_SECRET_KEY) {
       return res.status(500).json({
         success: false,
-        message: "Paystack is not configured",
+        message:
+          "Paystack is not configured",
       });
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * FIND BOOKING
-     * --------------------------------------------------
+     * ==================================================
      */
 
-    const booking = await Booking.findOne({
-      _id: bookingId,
-      guest: req.user.id,
-    })
-      .populate(
-        "guest",
-        "firstName lastName email"
-      )
-      .populate(
-        "accommodation",
-        "owner name status isAvailable"
-      );
+    const booking =
+      await Booking.findOne({
+        _id: bookingId,
+        guest: req.user.id,
+      })
+        .populate(
+          "guest",
+          "firstName lastName email"
+        )
+        .populate(
+          "accommodation",
+          "owner name status isAvailable"
+        );
 
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: "Booking not found",
+        message:
+          "Booking not found",
       });
     }
 
-    console.log("\nBOOKING FOUND");
-    console.log("Booking ID:", booking._id);
+    console.log(
+      "\nBOOKING FOUND"
+    );
+
+    console.log(
+      "Booking ID:",
+      booking._id
+    );
+
     console.log(
       "Booking total amount:",
       booking.totalAmount
     );
+
     console.log(
       "Booking status:",
       booking.bookingStatus
     );
+
     console.log(
       "Payment status:",
       booking.paymentStatus
     );
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * ACCOMMODATION VALIDATION
-     * --------------------------------------------------
+     * ==================================================
      */
 
     if (!booking.accommodation) {
@@ -962,9 +942,9 @@ export const initializePayment = async (req, res) => {
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * FIND OWNER
-     * --------------------------------------------------
+     * ==================================================
      */
 
     const propertyOwner =
@@ -977,11 +957,15 @@ export const initializePayment = async (req, res) => {
     if (!propertyOwner) {
       return res.status(400).json({
         success: false,
-        message: "Property owner not found",
+        message:
+          "Property owner not found",
       });
     }
 
-    console.log("\nOWNER FOUND");
+    console.log(
+      "\nOWNER FOUND"
+    );
+
     console.log(
       "Owner ID:",
       propertyOwner._id.toString()
@@ -1003,9 +987,9 @@ export const initializePayment = async (req, res) => {
     );
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * OWNER PAYMENT VALIDATION
-     * --------------------------------------------------
+     * ==================================================
      */
 
     if (propertyOwner.role !== "owner") {
@@ -1028,9 +1012,9 @@ export const initializePayment = async (req, res) => {
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * BOOKING STATUS
-     * --------------------------------------------------
+     * ==================================================
      */
 
     if (
@@ -1055,50 +1039,32 @@ export const initializePayment = async (req, res) => {
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * VALIDATE BOOKING TOTAL
-     * --------------------------------------------------
+     * ==================================================
      *
      * booking.totalAmount already contains:
      *
      * Owner accommodation price
      * +
-     * TripGuard 10% commission
-     *
-     * Example:
-     *
-     * Owner price       = ₦85,000
-     * TripGuard         = ₦8,500
-     * Customer pays     = ₦93,500
-     *
-     * Therefore we MUST NOT add another
-     * 10% here.
+     * TripGuard commission
      */
 
     if (
       !booking.totalAmount ||
-      booking.totalAmount <= 0
+      Number(booking.totalAmount) <= 0
     ) {
       return res.status(400).json({
         success: false,
-        message: "Invalid booking amount",
+        message:
+          "Invalid booking amount",
       });
     }
 
     /*
-     * --------------------------------------------------
-     * CALCULATE THE ORIGINAL OWNER PRICE
-     * --------------------------------------------------
-     *
-     * Since booking.totalAmount is already
-     * grossed up by 10%:
-     *
-     * ownerAmount =
-     * customerAmount / 1.10
-     *
-     * Example:
-     *
-     * 93,500 / 1.10 = 85,000
+     * ==================================================
+     * CALCULATE PAYMENT SPLIT
+     * ==================================================
      */
 
     const customerAmount =
@@ -1106,34 +1072,31 @@ export const initializePayment = async (req, res) => {
         Number(booking.totalAmount) * 100
       ) / 100;
 
-    const ownerAmount =
-      Math.round(
-        (customerAmount /
-          (1 +
-            TRIPGUARD_COMMISSION_RATE /
-              100)) *
-          100
-      ) / 100;
-
-    const commissionAmount =
-      Math.round(
-        (customerAmount -
-          ownerAmount) *
-          100
-      ) / 100;
-
-    const commissionRate =
-      TRIPGUARD_COMMISSION_RATE;
+    const {
+      commissionRate,
+      commissionAmount,
+      ownerAmount,
+    } = calculatePaymentSplit(
+      customerAmount
+    );
 
     /*
-     * --------------------------------------------------
-     * VERIFY CALCULATION
-     * --------------------------------------------------
+     * ==================================================
+     * DEBUG PAYMENT CALCULATION
+     * ==================================================
      */
 
-    console.log("\n========================================");
-    console.log("CORRECT PAYMENT CALCULATION");
-    console.log("========================================");
+    console.log(
+      "\n========================================"
+    );
+
+    console.log(
+      "CORRECT PAYMENT CALCULATION"
+    );
+
+    console.log(
+      "========================================"
+    );
 
     console.log(
       "Owner accommodation price:",
@@ -1155,12 +1118,14 @@ export const initializePayment = async (req, res) => {
       `${commissionRate}%`
     );
 
-    console.log("========================================\n");
+    console.log(
+      "========================================\n"
+    );
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * PREVENT DUPLICATE PAYMENT
-     * --------------------------------------------------
+     * ==================================================
      */
 
     const existingPayment =
@@ -1179,9 +1144,9 @@ export const initializePayment = async (req, res) => {
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * CUSTOMER EMAIL
-     * --------------------------------------------------
+     * ==================================================
      */
 
     const customerEmail =
@@ -1197,22 +1162,18 @@ export const initializePayment = async (req, res) => {
     }
 
     /*
-     * --------------------------------------------------
-     * GENERATE REFERENCE
-     * --------------------------------------------------
+     * ==================================================
+     * GENERATE PAYMENT REFERENCE
+     * ==================================================
      */
 
     const reference =
       generateReference();
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * CREATE LOCAL PAYMENT
-     * --------------------------------------------------
-     *
-     * amount = what customer pays
-     * ownerAmount = what owner receives
-     * commissionAmount = what TripGuard keeps
+     * ==================================================
      */
 
     const payment =
@@ -1263,7 +1224,9 @@ export const initializePayment = async (req, res) => {
         },
       });
 
-    console.log("\nLOCAL PAYMENT CREATED");
+    console.log(
+      "\nLOCAL PAYMENT CREATED"
+    );
 
     console.log(
       "Payment ID:",
@@ -1276,9 +1239,9 @@ export const initializePayment = async (req, res) => {
     );
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * CONVERT TO KOBO
-     * --------------------------------------------------
+     * ==================================================
      */
 
     const amountInKobo =
@@ -1291,7 +1254,9 @@ export const initializePayment = async (req, res) => {
         commissionAmount * 100
       );
 
-    console.log("\nKOBO VALUES");
+    console.log(
+      "\nKOBO VALUES"
+    );
 
     console.log(
       "Customer pays:",
@@ -1311,20 +1276,9 @@ export const initializePayment = async (req, res) => {
     );
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * PAYSTACK PAYLOAD
-     * --------------------------------------------------
-     *
-     * Customer:
-     * ₦93,500
-     *
-     * Paystack sends:
-     *
-     * Owner:
-     * ₦85,000
-     *
-     * TripGuard:
-     * ₦8,500
+     * ==================================================
      */
 
     const paystackPayload = {
@@ -1374,9 +1328,9 @@ export const initializePayment = async (req, res) => {
     };
 
     /*
-     * --------------------------------------------------
-     * DEBUG
-     * --------------------------------------------------
+     * ==================================================
+     * DEBUG PAYSTACK PAYLOAD
+     * ==================================================
      */
 
     console.log(
@@ -1420,9 +1374,9 @@ export const initializePayment = async (req, res) => {
     );
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * SEND TO PAYSTACK
-     * --------------------------------------------------
+     * ==================================================
      */
 
     let paystackResponse;
@@ -1469,9 +1423,9 @@ export const initializePayment = async (req, res) => {
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * READ PAYSTACK RESPONSE
-     * --------------------------------------------------
+     * ==================================================
      */
 
     let paystackData;
@@ -1521,9 +1475,9 @@ export const initializePayment = async (req, res) => {
     );
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * PAYSTACK REJECTED REQUEST
-     * --------------------------------------------------
+     * ==================================================
      */
 
     if (
@@ -1551,9 +1505,9 @@ export const initializePayment = async (req, res) => {
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * SAVE PAYSTACK INFORMATION
-     * --------------------------------------------------
+     * ==================================================
      */
 
     payment.paystackReference =
@@ -1572,9 +1526,9 @@ export const initializePayment = async (req, res) => {
     await payment.save();
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * SUCCESS
-     * --------------------------------------------------
+     * ==================================================
      */
 
     console.log(
@@ -1612,9 +1566,9 @@ export const initializePayment = async (req, res) => {
     );
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * RETURN RESPONSE
-     * --------------------------------------------------
+     * ==================================================
      */
 
     return res.status(201).json({
@@ -1645,12 +1599,10 @@ export const initializePayment = async (req, res) => {
         commissionAmount,
 
         authorizationUrl:
-          paystackData.data
-            .authorization_url,
+          paystackData.data.authorization_url,
 
         accessCode:
-          paystackData.data
-            .access_code,
+          paystackData.data.access_code,
       },
     });
   } catch (error) {
@@ -1688,9 +1640,9 @@ export const initializePayment = async (req, res) => {
 };
 
 /*
- * --------------------------------------------------
+ * ==================================================
  * VERIFY PAYMENT
- * --------------------------------------------------
+ * ==================================================
  */
 
 export const verifyPayment = async (
@@ -1725,7 +1677,6 @@ export const verifyPayment = async (
     const payment =
       await Payment.findOne({
         reference,
-
         user: req.user.id,
       });
 
@@ -1756,7 +1707,7 @@ export const verifyPayment = async (
     }
 
     /*
-     * Ask Paystack for actual
+     * Ask Paystack for the actual
      * transaction status.
      */
 
@@ -1793,7 +1744,9 @@ export const verifyPayment = async (
       paystackData.data;
 
     /*
-     * Verify reference.
+     * ==================================================
+     * VERIFY REFERENCE
+     * ==================================================
      */
 
     if (
@@ -1808,7 +1761,9 @@ export const verifyPayment = async (
     }
 
     /*
-     * Verify amount.
+     * ==================================================
+     * VERIFY AMOUNT
+     * ==================================================
      */
 
     if (
@@ -1825,7 +1780,9 @@ export const verifyPayment = async (
     }
 
     /*
-     * Payment wasn't successful.
+     * ==================================================
+     * PAYMENT WAS NOT SUCCESSFUL
+     * ==================================================
      */
 
     if (
@@ -1843,8 +1800,7 @@ export const verifyPayment = async (
         "";
 
       payment.gatewayResponse =
-        transaction
-          .gateway_response ||
+        transaction.gateway_response ||
         null;
 
       await payment.save();
@@ -1863,7 +1819,9 @@ export const verifyPayment = async (
     }
 
     /*
-     * Mark successful.
+     * ==================================================
+     * MARK SUCCESSFUL
+     * ==================================================
      */
 
     const updatedPayment =
@@ -1896,9 +1854,9 @@ export const verifyPayment = async (
 };
 
 /*
- * --------------------------------------------------
+ * ==================================================
  * GET SINGLE PAYMENT
- * --------------------------------------------------
+ * ==================================================
  */
 
 export const getPayment = async (
@@ -1950,9 +1908,9 @@ export const getPayment = async (
 };
 
 /*
- * --------------------------------------------------
+ * ==================================================
  * GET TRAVELLER PAYMENTS
- * --------------------------------------------------
+ * ==================================================
  */
 
 export const getMyPayments = async (
@@ -2003,9 +1961,9 @@ export const getMyPayments = async (
 };
 
 /*
- * --------------------------------------------------
+ * ==================================================
  * GET PAYMENT BY REFERENCE
- * --------------------------------------------------
+ * ==================================================
  */
 
 export const getPaymentByReference =
@@ -2098,12 +2056,9 @@ export const handlePaystackWebhook =
       }
 
       /*
-       * --------------------------------------------------
+       * ==================================================
        * GET RAW PAYLOAD
-       * --------------------------------------------------
-       *
-       * Because this route uses express.raw(),
-       * req.body should be a Buffer.
+       * ==================================================
        */
 
       const payload =
@@ -2119,25 +2074,19 @@ export const handlePaystackWebhook =
             );
 
       /*
-       * --------------------------------------------------
+       * ==================================================
        * VERIFY PAYSTACK SIGNATURE
-       * --------------------------------------------------
+       * ==================================================
        */
 
       const hash =
         crypto
           .createHmac(
             "sha512",
-            process.env
-              .PAYSTACK_SECRET_KEY
+            process.env.PAYSTACK_SECRET_KEY
           )
           .update(payload)
           .digest("hex");
-
-      /*
-       * Use timingSafeEqual instead
-       * of a normal string comparison.
-       */
 
       const signatureBuffer =
         Buffer.from(
@@ -2167,9 +2116,9 @@ export const handlePaystackWebhook =
       }
 
       /*
-       * --------------------------------------------------
+       * ==================================================
        * PARSE EVENT
-       * --------------------------------------------------
+       * ==================================================
        */
 
       let event;
@@ -2201,9 +2150,9 @@ export const handlePaystackWebhook =
       }
 
       /*
-       * --------------------------------------------------
+       * ==================================================
        * ONLY PROCESS CHARGE.SUCCESS
-       * --------------------------------------------------
+       * ==================================================
        */
 
       if (
@@ -2232,9 +2181,9 @@ export const handlePaystackWebhook =
       }
 
       /*
-       * --------------------------------------------------
+       * ==================================================
        * FIND LOCAL PAYMENT
-       * --------------------------------------------------
+       * ==================================================
        */
 
       const payment =
@@ -2245,9 +2194,8 @@ export const handlePaystackWebhook =
 
       if (!payment) {
         /*
-         * Return 200 so Paystack
-         * does not repeatedly retry
-         * an unknown payment.
+         * Return 200 so Paystack does not
+         * repeatedly retry an unknown payment.
          */
 
         return res
@@ -2273,9 +2221,9 @@ export const handlePaystackWebhook =
       }
 
       /*
-       * --------------------------------------------------
+       * ==================================================
        * VERIFY TRANSACTION
-       * --------------------------------------------------
+       * ==================================================
        */
 
       if (
@@ -2296,9 +2244,9 @@ export const handlePaystackWebhook =
       }
 
       /*
-       * --------------------------------------------------
+       * ==================================================
        * MARK SUCCESSFUL
-       * --------------------------------------------------
+       * ==================================================
        */
 
       await markPaymentSuccessful(

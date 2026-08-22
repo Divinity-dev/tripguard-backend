@@ -122,11 +122,7 @@ const accommodationSchema = new mongoose.Schema(
       default: "",
     },
 
-    status: {
-      type: String,
-      enum: ["pending", "approved", "rejected", "suspended"],
-      default: "pending",
-    },
+    
 
     isAvailable: {
       type: Boolean,

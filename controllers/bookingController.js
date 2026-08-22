@@ -1,9 +1,20 @@
 import Booking from "../models/bookings.js";
 import Accommodation from "../models/accommodations.js";
 import { sendEmail } from "../utils/sendEmail.js";
+import createNotification from "../utils/createNotification.js";
 
 const TRIPGUARD_FEE_RATE = 10;
 
+/*
+ * ==================================================
+ * HELPERS
+ * ==================================================
+ */
+
+/*
+ * Returns the date in Nigeria (Africa/Lagos) as:
+ * YYYY-MM-DD
+ */
 const getNigeriaDateKey = (date = new Date()) => {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Africa/Lagos",
@@ -43,6 +54,10 @@ export const createBooking = async (req, res) => {
       });
     }
 
+    /*
+     * Only approved and available accommodations
+     * can be booked.
+     */
     const property = await Accommodation.findOne({
       _id: accommodation,
       status: "approved",
@@ -72,14 +87,16 @@ export const createBooking = async (req, res) => {
     if (checkOut <= checkIn) {
       return res.status(400).json({
         success: false,
-        message:
-          "Check-out date must be after check-in date",
+        message: "Check-out date must be after check-in date",
       });
     }
 
+    /*
+     * Validate number of guests.
+     */
     if (
-      guests < 1 ||
-      guests > property.maxGuests
+      Number(guests) < 1 ||
+      Number(guests) > property.maxGuests
     ) {
       return res.status(400).json({
         success: false,
@@ -87,18 +104,16 @@ export const createBooking = async (req, res) => {
       });
     }
 
-    const millisecondsPerDay =
-      1000 * 60 * 60 * 24;
+    const millisecondsPerDay = 1000 * 60 * 60 * 24;
 
     const totalNights = Math.ceil(
-      (checkOut - checkIn) /
-        millisecondsPerDay
+      (checkOut - checkIn) / millisecondsPerDay
     );
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * PAYMENT CALCULATION
-     * --------------------------------------------------
+     * ==================================================
      *
      * Accommodation amount
      * + 10% TripGuard service fee
@@ -106,8 +121,7 @@ export const createBooking = async (req, res) => {
      */
 
     const accommodationAmount =
-      totalNights *
-      property.pricePerNight;
+      totalNights * property.pricePerNight;
 
     const serviceFee =
       Math.round(
@@ -117,13 +131,15 @@ export const createBooking = async (req, res) => {
       ) / 100;
 
     const totalAmount =
-      accommodationAmount +
-      serviceFee;
+      accommodationAmount + serviceFee;
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * PREVENT DOUBLE BOOKING
-     * --------------------------------------------------
+     * ==================================================
+     *
+     * Pending, confirmed and checked-in bookings
+     * block the selected dates.
      */
 
     const conflictingBooking =
@@ -153,7 +169,7 @@ export const createBooking = async (req, res) => {
     }
 
     /*
-     * Generate booking reference
+     * Generate booking reference.
      */
 
     const bookingReference =
@@ -162,7 +178,9 @@ export const createBooking = async (req, res) => {
       )}`;
 
     /*
-     * Create booking
+     * ==================================================
+     * CREATE BOOKING
+     * ==================================================
      */
 
     const booking =
@@ -197,6 +215,10 @@ export const createBooking = async (req, res) => {
           safetyContact || {},
       });
 
+    /*
+     * Populate booking before returning it.
+     */
+
     const populatedBooking =
       await Booking.findById(
         booking._id
@@ -205,10 +227,61 @@ export const createBooking = async (req, res) => {
         "name images pricePerNight location checkInTime checkOutTime owner"
       );
 
+    /*
+     * ==================================================
+     * NOTIFY PROPERTY OWNER
+     * ==================================================
+     */
+
+    await createNotification({
+      recipient: property.owner,
+
+      type: "booking",
+
+      title: "New booking request",
+
+      message:
+        `A traveller has created a booking for ${property.name}. Booking reference: ${booking.bookingReference}.`,
+
+      booking: booking._id,
+
+      accommodation: property._id,
+
+      priority: "high",
+
+      actionUrl:
+        `/owner/bookings/${booking._id}`,
+    });
+
+    /*
+     * ==================================================
+     * NOTIFY TRAVELLER
+     * ==================================================
+     */
+
+    await createNotification({
+      recipient: req.user.id,
+
+      type: "booking",
+
+      title: "Booking created",
+
+      message:
+        `Your booking for ${property.name} has been created successfully. Please complete payment to confirm your booking.`,
+
+      booking: booking._id,
+
+      accommodation: property._id,
+
+      priority: "normal",
+
+      actionUrl:
+        `/traveller/bookings/${booking._id}`,
+    });
+
     return res.status(201).json({
       success: true,
-      message:
-        "Booking created successfully",
+      message: "Booking created successfully",
       booking: populatedBooking,
     });
   } catch (error) {
@@ -219,8 +292,7 @@ export const createBooking = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message:
-        "Unable to create booking",
+      message: "Unable to create booking",
     });
   }
 };
@@ -261,8 +333,76 @@ export const getMyBookings = async (
 
     return res.status(500).json({
       success: false,
+      message: "Unable to retrieve bookings",
+    });
+  }
+};
+
+/*
+ * ==================================================
+ * GET OWNER BOOKINGS
+ * ==================================================
+ */
+
+export const getOwnerBookings = async (
+  req,
+  res
+) => {
+  try {
+    /*
+     * Find accommodations belonging
+     * to the logged-in owner.
+     */
+
+    const accommodations =
+      await Accommodation.find({
+        owner: req.user.id,
+      }).select("_id");
+
+    const accommodationIds =
+      accommodations.map(
+        (accommodation) =>
+          accommodation._id
+      );
+
+    /*
+     * Find bookings belonging to those
+     * accommodations.
+     */
+
+    const bookings =
+      await Booking.find({
+        accommodation: {
+          $in: accommodationIds,
+        },
+      })
+        .populate(
+          "accommodation",
+          "name images pricePerNight location checkInTime checkOutTime owner"
+        )
+        .populate(
+          "guest",
+          "firstName lastName email phone profileImage"
+        )
+        .sort({
+          createdAt: -1,
+        });
+
+    return res.status(200).json({
+      success: true,
+      count: bookings.length,
+      bookings,
+    });
+  } catch (error) {
+    console.error(
+      "Get owner bookings error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
       message:
-        "Unable to retrieve bookings",
+        "Unable to retrieve owner bookings",
     });
   }
 };
@@ -287,6 +427,10 @@ export const getBooking = async (
           "name images pricePerNight location checkInTime checkOutTime owner"
         )
         .populate(
+          "accommodation.owner",
+          "firstName lastName email phone"
+        )
+        .populate(
           "guest",
           "firstName lastName email phone profileImage"
         );
@@ -302,8 +446,17 @@ export const getBooking = async (
       booking.guest?._id?.toString() ===
       req.user.id.toString();
 
+    /*
+     * Because accommodation.owner is populated
+     * above, use its _id when checking ownership.
+     */
+
+    const ownerId =
+      booking.accommodation?.owner?._id ||
+      booking.accommodation?.owner;
+
     const isOwner =
-      booking.accommodation?.owner?.toString() ===
+      ownerId?.toString() ===
       req.user.id.toString();
 
     const isAdmin =
@@ -367,20 +520,62 @@ export const cancelBooking = async (
     }
 
     /*
-     * Only the traveller who created
-     * the booking can cancel it.
+     * Find the accommodation owner.
      */
 
-    if (
-      booking.guest.toString() !==
-      req.user.id.toString()
-    ) {
+    const accommodation =
+      await Accommodation.findById(
+        booking.accommodation
+      ).select("owner name");
+
+    if (!accommodation) {
+      return res.status(404).json({
+        success: false,
+        message: "Accommodation not found",
+      });
+    }
+
+    /*
+     * The booking can be cancelled by:
+     *
+     * 1. The traveller
+     * 2. The accommodation owner
+     */
+
+    const isGuest =
+      booking.guest.toString() ===
+      req.user.id.toString();
+
+    const isOwner =
+      accommodation.owner.toString() ===
+      req.user.id.toString();
+
+    if (!isGuest && !isOwner) {
       return res.status(403).json({
         success: false,
         message:
           "You are not authorized to cancel this booking",
       });
     }
+
+    /*
+     * Owners can only cancel pending bookings.
+     */
+
+    if (
+      isOwner &&
+      booking.bookingStatus !== "pending"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Owners can only cancel pending bookings",
+      });
+    }
+
+    /*
+     * Already cancelled.
+     */
 
     if (
       booking.bookingStatus ===
@@ -392,6 +587,11 @@ export const cancelBooking = async (
           "This booking has already been cancelled",
       });
     }
+
+    /*
+     * Once the stay has started or ended,
+     * the booking cannot be cancelled.
+     */
 
     if (
       booking.bookingStatus ===
@@ -408,6 +608,10 @@ export const cancelBooking = async (
       });
     }
 
+    /*
+     * Cancel the booking.
+     */
+
     booking.bookingStatus =
       "cancelled";
 
@@ -418,6 +622,57 @@ export const cancelBooking = async (
       new Date();
 
     await booking.save();
+
+    /*
+     * ==================================================
+     * NOTIFY THE OTHER PARTY
+     * ==================================================
+     */
+
+    if (isOwner) {
+      await createNotification({
+        recipient: booking.guest,
+
+        type: "booking",
+
+        title: "Booking cancelled",
+
+        message:
+          `Your booking ${booking.bookingReference} has been cancelled by the property owner.`,
+
+        booking: booking._id,
+
+        accommodation:
+          booking.accommodation,
+
+        priority: "high",
+
+        actionUrl:
+          `/traveller/bookings/${booking._id}`,
+      });
+    } else {
+      await createNotification({
+        recipient:
+          accommodation.owner,
+
+        type: "booking",
+
+        title: "Booking cancelled",
+
+        message:
+          `Booking ${booking.bookingReference} has been cancelled by the traveller.`,
+
+        booking: booking._id,
+
+        accommodation:
+          booking.accommodation,
+
+        priority: "high",
+
+        actionUrl:
+          `/owner/bookings/${booking._id}`,
+      });
+    }
 
     return res.status(200).json({
       success: true,
@@ -441,13 +696,34 @@ export const cancelBooking = async (
 
 /*
  * ==================================================
- * CHECK IN BOOKING / ACTIVATE TRIPGUARD PROTECTION
+ * CHECK IN BOOKING
  * ==================================================
+ *
+ * IMPORTANT:
+ *
+ * Only the traveller can perform this action.
+ *
+ * This is the ONLY place where a booking should
+ * transition from:
+ *
+ * confirmed → checked-in
+ *
+ * TripGuard protection is activated here.
  */
 
-export const checkInBooking = async (req, res) => {
+export const checkInBooking = async (
+  req,
+  res
+) => {
   try {
-    const { safetyEmail } = req.body;
+    const { safetyEmail } =
+      req.body;
+
+    /*
+     * ==================================================
+     * VALIDATE SAFETY CONTACT EMAIL
+     * ==================================================
+     */
 
     if (!safetyEmail?.trim()) {
       return res.status(400).json({
@@ -457,13 +733,10 @@ export const checkInBooking = async (req, res) => {
       });
     }
 
-    const normalizedEmail = safetyEmail
-      .trim()
-      .toLowerCase();
-
-    /*
-     * Basic email validation
-     */
+    const normalizedEmail =
+      safetyEmail
+        .trim()
+        .toLowerCase();
 
     const emailRegex =
       /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -471,20 +744,24 @@ export const checkInBooking = async (req, res) => {
     if (!emailRegex.test(normalizedEmail)) {
       return res.status(400).json({
         success: false,
-        message: "Please provide a valid email address",
+        message:
+          "Please provide a valid email address",
       });
     }
 
     /*
-     * Find the booking and populate the accommodation.
+     * ==================================================
+     * FIND BOOKING
+     * ==================================================
      */
 
-    const booking = await Booking.findById(
-      req.params.id
-    ).populate(
-      "accommodation",
-      "name images location checkInTime checkOutTime owner"
-    );
+    const booking =
+      await Booking.findById(
+        req.params.id
+      ).populate(
+        "accommodation",
+        "name images location checkInTime checkOutTime owner"
+      );
 
     if (!booking) {
       return res.status(404).json({
@@ -494,8 +771,9 @@ export const checkInBooking = async (req, res) => {
     }
 
     /*
-     * Only the traveller who created
-     * the booking can check in.
+     * ==================================================
+     * VERIFY TRAVELLER
+     * ==================================================
      */
 
     if (
@@ -510,11 +788,14 @@ export const checkInBooking = async (req, res) => {
     }
 
     /*
-     * The booking must be paid before
-     * TripGuard protection can be activated.
+     * ==================================================
+     * VERIFY PAYMENT
+     * ==================================================
      */
 
-    if (booking.paymentStatus !== "paid") {
+    if (
+      booking.paymentStatus !== "paid"
+    ) {
       return res.status(400).json({
         success: false,
         message:
@@ -523,11 +804,26 @@ export const checkInBooking = async (req, res) => {
     }
 
     /*
-     * The booking must already be confirmed
-     * by the accommodation owner.
+     * ==================================================
+     * VERIFY BOOKING STATUS
+     * ==================================================
      */
 
-    if (booking.bookingStatus !== "confirmed") {
+    if (
+      booking.bookingStatus ===
+      "checked-in"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "You have already checked in to this accommodation",
+      });
+    }
+
+    if (
+      booking.bookingStatus !==
+      "confirmed"
+    ) {
       return res.status(400).json({
         success: false,
         message:
@@ -536,26 +832,18 @@ export const checkInBooking = async (req, res) => {
     }
 
     /*
-     * Prevent duplicate check-ins.
+     * ==================================================
+     * VERIFY CHECK-IN DATE
+     * ==================================================
      */
 
-    if (booking.bookingStatus === "checked-in") {
-      return res.status(400).json({
-        success: false,
-        message:
-          "You have already checked in to this accommodation",
-      });
-    }
+    const today =
+      getNigeriaDateKey();
 
-    /*
-     * Check that today is the actual check-in date.
-     */
-
-    const today = getNigeriaDateKey();
-
-    const checkInDate = getNigeriaDateKey(
-      booking.checkInDate
-    );
+    const checkInDate =
+      getNigeriaDateKey(
+        booking.checkInDate
+      );
 
     if (today !== checkInDate) {
       return res.status(400).json({
@@ -566,22 +854,23 @@ export const checkInBooking = async (req, res) => {
     }
 
     /*
-     * Store the safety contact.
-     *
-     * We intentionally collect the email here,
-     * rather than activating protection when the
-     * booking is created.
+     * ==================================================
+     * STORE SAFETY CONTACT
+     * ==================================================
      */
 
     booking.safetyContact = {
       ...(booking.safetyContact?.toObject
         ? booking.safetyContact.toObject()
         : booking.safetyContact || {}),
+
       email: normalizedEmail,
     };
 
     /*
-     * Send the TripGuard check-in notification.
+     * ==================================================
+     * PREPARE EMAIL DETAILS
+     * ==================================================
      */
 
     const accommodation =
@@ -598,6 +887,18 @@ export const checkInBooking = async (req, res) => {
       .filter(Boolean)
       .join(", ");
 
+    /*
+     * ==================================================
+     * SEND CHECK-IN SAFETY EMAIL
+     * ==================================================
+     *
+     * We intentionally send the email BEFORE changing
+     * the booking status.
+     *
+     * If the email fails, the booking remains confirmed
+     * and TripGuard protection is not activated.
+     */
+
     await sendEmail({
       to: normalizedEmail,
 
@@ -606,6 +907,7 @@ export const checkInBooking = async (req, res) => {
 
       html: `
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1f2937; max-width: 600px; margin: 0 auto;">
+
           <div style="background: #16a765; padding: 24px; text-align: center;">
             <h1 style="color: white; margin: 0;">
               TripGuard
@@ -613,6 +915,7 @@ export const checkInBooking = async (req, res) => {
           </div>
 
           <div style="padding: 30px 24px;">
+
             <h2 style="margin-top: 0;">
               Safety Notification
             </h2>
@@ -622,11 +925,14 @@ export const checkInBooking = async (req, res) => {
             </p>
 
             <p>
-              <strong>${req.user.firstName || "The traveller"}</strong>
+              <strong>
+                ${req.user.firstName || "The traveller"}
+              </strong>
               has checked in to the following accommodation:
             </p>
 
             <div style="background: #f7f9f8; border-radius: 10px; padding: 18px; margin: 20px 0;">
+
               <p style="margin: 0 0 8px;">
                 <strong>Accommodation:</strong>
                 ${accommodation?.name || "Accommodation"}
@@ -654,6 +960,7 @@ export const checkInBooking = async (req, res) => {
                 <strong>Booking reference:</strong>
                 ${booking.bookingReference}
               </p>
+
             </div>
 
             <p>
@@ -671,29 +978,66 @@ export const checkInBooking = async (req, res) => {
               Stay safe,<br />
               <strong>TripGuard</strong>
             </p>
+
           </div>
         </div>
       `,
     });
 
     /*
-     * Only change the booking status after the
-     * notification has successfully been sent.
+     * ==================================================
+     * ACTIVATE TRIPGUARD PROTECTION
+     * ==================================================
      */
 
-   booking.bookingStatus = "checked-in";
+    booking.bookingStatus =
+      "checked-in";
 
-booking.safetyContact.protectionCheckInAt = new Date();
+    booking.safetyContact.protectionCheckInAt =
+      new Date();
 
-booking.safetyNotifications = {
-  enabled: true,
-  checkInNotificationSent: true,
-  checkOutNotificationSent:
-    booking.safetyNotifications
-      ?.checkOutNotificationSent || false,
-};
+    booking.safetyNotifications = {
+      enabled: true,
+
+      checkInNotificationSent: true,
+
+      checkOutNotificationSent:
+        booking.safetyNotifications
+          ?.checkOutNotificationSent ||
+        false,
+    };
 
     await booking.save();
+
+    /*
+     * ==================================================
+     * NOTIFY OWNER
+     * ==================================================
+     */
+
+    if (accommodation?.owner) {
+      await createNotification({
+        recipient:
+          accommodation.owner,
+
+        type: "booking",
+
+        title: "Traveller checked in",
+
+        message:
+          `The traveller for booking ${booking.bookingReference} has checked in to ${accommodation.name}.`,
+
+        booking: booking._id,
+
+        accommodation:
+          accommodation._id,
+
+        priority: "normal",
+
+        actionUrl:
+          `/owner/bookings/${booking._id}`,
+      });
+    }
 
     return res.status(200).json({
       success: true,
@@ -717,18 +1061,39 @@ booking.safetyNotifications = {
 
 /*
  * ==================================================
- * CHECK OUT BOOKING / SEND SAFETY NOTIFICATION
+ * CHECK OUT BOOKING
  * ==================================================
+ *
+ * IMPORTANT:
+ *
+ * Only the traveller can perform this action.
+ *
+ * This is the ONLY place where a booking should
+ * transition from:
+ *
+ * checked-in → checked-out
+ *
+ * TripGuard protection ends here.
  */
 
-export const checkOutBooking = async (req, res) => {
+export const checkOutBooking = async (
+  req,
+  res
+) => {
   try {
-    const booking = await Booking.findById(
-      req.params.id
-    ).populate(
-      "accommodation",
-      "name images location checkInTime checkOutTime owner"
-    );
+    /*
+     * ==================================================
+     * FIND BOOKING
+     * ==================================================
+     */
+
+    const booking =
+      await Booking.findById(
+        req.params.id
+      ).populate(
+        "accommodation",
+        "name images location checkInTime checkOutTime owner"
+      );
 
     if (!booking) {
       return res.status(404).json({
@@ -738,8 +1103,9 @@ export const checkOutBooking = async (req, res) => {
     }
 
     /*
-     * Only the traveller who created
-     * the booking can check out.
+     * ==================================================
+     * VERIFY TRAVELLER
+     * ==================================================
      */
 
     if (
@@ -754,10 +1120,15 @@ export const checkOutBooking = async (req, res) => {
     }
 
     /*
-     * Traveller must currently be checked in.
+     * ==================================================
+     * VERIFY CHECK-IN STATUS
+     * ==================================================
      */
 
-    if (booking.bookingStatus !== "checked-in") {
+    if (
+      booking.bookingStatus !==
+      "checked-in"
+    ) {
       return res.status(400).json({
         success: false,
         message:
@@ -766,8 +1137,9 @@ export const checkOutBooking = async (req, res) => {
     }
 
     /*
-     * We need the safety contact that was
-     * supplied during check-in.
+     * ==================================================
+     * VERIFY SAFETY CONTACT
+     * ==================================================
      */
 
     const safetyEmail =
@@ -782,14 +1154,18 @@ export const checkOutBooking = async (req, res) => {
     }
 
     /*
-     * Check that today is the actual check-out date.
+     * ==================================================
+     * VERIFY CHECK-OUT DATE
+     * ==================================================
      */
 
-    const today = getNigeriaDateKey();
+    const today =
+      getNigeriaDateKey();
 
-    const checkOutDate = getNigeriaDateKey(
-      booking.checkOutDate
-    );
+    const checkOutDate =
+      getNigeriaDateKey(
+        booking.checkOutDate
+      );
 
     if (today !== checkOutDate) {
       return res.status(400).json({
@@ -798,6 +1174,12 @@ export const checkOutBooking = async (req, res) => {
           `You can only check out on ${checkOutDate}`,
       });
     }
+
+    /*
+     * ==================================================
+     * PREPARE EMAIL DETAILS
+     * ==================================================
+     */
 
     const accommodation =
       booking.accommodation;
@@ -814,7 +1196,11 @@ export const checkOutBooking = async (req, res) => {
       .join(", ");
 
     /*
-     * Send checkout notification.
+     * ==================================================
+     * SEND CHECK-OUT SAFETY EMAIL
+     * ==================================================
+     *
+     * The booking remains checked-in if the email fails.
      */
 
     await sendEmail({
@@ -825,6 +1211,7 @@ export const checkOutBooking = async (req, res) => {
 
       html: `
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1f2937; max-width: 600px; margin: 0 auto;">
+
           <div style="background: #16a765; padding: 24px; text-align: center;">
             <h1 style="color: white; margin: 0;">
               TripGuard
@@ -832,6 +1219,7 @@ export const checkOutBooking = async (req, res) => {
           </div>
 
           <div style="padding: 30px 24px;">
+
             <h2 style="margin-top: 0;">
               Safety Notification
             </h2>
@@ -841,11 +1229,14 @@ export const checkOutBooking = async (req, res) => {
             </p>
 
             <p>
-              <strong>${req.user.firstName || "The traveller"}</strong>
+              <strong>
+                ${req.user.firstName || "The traveller"}
+              </strong>
               has checked out of the following accommodation:
             </p>
 
             <div style="background: #f7f9f8; border-radius: 10px; padding: 18px; margin: 20px 0;">
+
               <p style="margin: 0 0 8px;">
                 <strong>Accommodation:</strong>
                 ${accommodation?.name || "Accommodation"}
@@ -873,6 +1264,7 @@ export const checkOutBooking = async (req, res) => {
                 <strong>Booking reference:</strong>
                 ${booking.bookingReference}
               </p>
+
             </div>
 
             <p>
@@ -888,29 +1280,66 @@ export const checkOutBooking = async (req, res) => {
               Stay safe,<br />
               <strong>TripGuard</strong>
             </p>
+
           </div>
         </div>
       `,
     });
 
     /*
-     * Only mark the booking as checked out
-     * after the email has successfully been sent.
+     * ==================================================
+     * END TRIPGUARD PROTECTION
+     * ==================================================
      */
 
-   booking.bookingStatus = "checked-out";
+    booking.bookingStatus =
+      "checked-out";
 
-booking.safetyContact.protectionCheckOutAt = new Date();
+    booking.safetyContact.protectionCheckOutAt =
+      new Date();
 
-booking.safetyNotifications = {
-  enabled: true,
-  checkInNotificationSent:
-    booking.safetyNotifications
-      ?.checkInNotificationSent || false,
-  checkOutNotificationSent: true,
-};
+    booking.safetyNotifications = {
+      enabled: true,
 
-await booking.save();
+      checkInNotificationSent:
+        booking.safetyNotifications
+          ?.checkInNotificationSent ||
+        false,
+
+      checkOutNotificationSent: true,
+    };
+
+    await booking.save();
+
+    /*
+     * ==================================================
+     * NOTIFY OWNER
+     * ==================================================
+     */
+
+    if (accommodation?.owner) {
+      await createNotification({
+        recipient:
+          accommodation.owner,
+
+        type: "booking",
+
+        title: "Traveller checked out",
+
+        message:
+          `The traveller for booking ${booking.bookingReference} has checked out of ${accommodation.name}.`,
+
+        booking: booking._id,
+
+        accommodation:
+          accommodation._id,
+
+        priority: "normal",
+
+        actionUrl:
+          `/owner/bookings/${booking._id}`,
+      });
+    }
 
     return res.status(200).json({
       success: true,
@@ -936,6 +1365,34 @@ await booking.save();
  * ==================================================
  * UPDATE BOOKING STATUS
  * ==================================================
+ *
+ * IMPORTANT:
+ *
+ * This function is for OWNER / ADMIN management.
+ *
+ * Owners/admins MUST NOT be able to manually set:
+ *
+ *     checked-in
+ *     checked-out
+ *
+ * Those states are controlled exclusively by:
+ *
+ *     checkInBooking()
+ *     checkOutBooking()
+ *
+ * Therefore:
+ *
+ * OWNER / ADMIN:
+ *
+ * pending → confirmed
+ * pending → cancelled
+ * confirmed → cancelled
+ * checked-out → completed
+ *
+ * TRAVELLER:
+ *
+ * confirmed → checked-in
+ * checked-in → checked-out
  */
 
 export const updateBookingStatus = async (
@@ -947,11 +1404,18 @@ export const updateBookingStatus = async (
       bookingStatus,
     } = req.body;
 
+    /*
+     * ==================================================
+     * ALLOWED ADMIN / OWNER STATUSES
+     * ==================================================
+     *
+     * Notice that checked-in and checked-out
+     * are intentionally NOT here.
+     */
+
     const allowedStatuses = [
       "pending",
       "confirmed",
-      "checked-in",
-      "checked-out",
       "cancelled",
       "completed",
     ];
@@ -964,16 +1428,22 @@ export const updateBookingStatus = async (
       return res.status(400).json({
         success: false,
         message:
-          "Invalid booking status",
+          "Invalid booking status. Check-in and check-out must be performed by the traveller.",
       });
     }
+
+    /*
+     * ==================================================
+     * FIND BOOKING
+     * ==================================================
+     */
 
     const booking =
       await Booking.findById(
         req.params.id
       ).populate(
         "accommodation",
-        "owner"
+        "owner name"
       );
 
     if (!booking) {
@@ -983,8 +1453,15 @@ export const updateBookingStatus = async (
       });
     }
 
+    /*
+     * ==================================================
+     * VERIFY OWNER / ADMIN
+     * ==================================================
+     */
+
     const isOwner =
-      booking.accommodation?.owner?.toString() ===
+      booking.accommodation?.owner
+        ?.toString() ===
       req.user.id.toString();
 
     const isAdmin =
@@ -998,21 +1475,17 @@ export const updateBookingStatus = async (
       });
     }
 
-    if (
-      bookingStatus === "confirmed" &&
-      booking.paymentStatus !== "paid"
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A booking must be paid before it can be confirmed",
-      });
-    }
+    /*
+     * ==================================================
+     * COMPLETED BOOKING
+     * ==================================================
+     *
+     * Once completed, it cannot be modified.
+     */
 
     if (
       booking.bookingStatus ===
-        "completed" &&
-      bookingStatus !== "completed"
+      "completed"
     ) {
       return res.status(400).json({
         success: false,
@@ -1021,10 +1494,237 @@ export const updateBookingStatus = async (
       });
     }
 
+    /*
+     * ==================================================
+     * CONFIRM BOOKING
+     * ==================================================
+     *
+     * Payment MUST be completed first.
+     */
+
+    if (
+      bookingStatus === "confirmed"
+    ) {
+      if (
+        booking.paymentStatus !== "paid"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "A booking must be paid before it can be confirmed",
+        });
+      }
+
+      /*
+       * Only pending bookings can be confirmed.
+       */
+
+      if (
+        booking.bookingStatus !==
+        "pending"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Only pending bookings can be confirmed",
+        });
+      }
+    }
+
+    /*
+     * ==================================================
+     * CANCEL BOOKING
+     * ==================================================
+     *
+     * The owner/admin status endpoint can cancel
+     * pending or confirmed bookings.
+     *
+     * It cannot cancel a stay that has already started.
+     */
+
+    if (
+      bookingStatus === "cancelled"
+    ) {
+      if (
+        booking.bookingStatus ===
+          "checked-in" ||
+        booking.bookingStatus ===
+          "checked-out"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "A booking that has already entered the stay cannot be cancelled",
+        });
+      }
+
+      if (
+        booking.bookingStatus ===
+        "cancelled"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "This booking has already been cancelled",
+        });
+      }
+
+      booking.cancellationReason =
+        booking.cancellationReason ||
+        "Cancelled by property owner or administrator";
+
+      booking.cancelledAt =
+        new Date();
+    }
+
+    /*
+     * ==================================================
+     * COMPLETE BOOKING
+     * ==================================================
+     *
+     * A booking can only become completed
+     * AFTER the traveller has checked out.
+     *
+     * This means:
+     *
+     * checked-out → completed
+     *
+     * is allowed.
+     */
+
+    if (
+      bookingStatus === "completed"
+    ) {
+      if (
+        booking.bookingStatus !==
+        "checked-out"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "A booking can only be completed after the traveller has checked out",
+        });
+      }
+    }
+
+    /*
+     * ==================================================
+     * PREVENT INVALID BACKWARD MOVEMENTS
+     * ==================================================
+     */
+
+    if (
+      booking.bookingStatus ===
+      "checked-in"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "This booking is currently active. The traveller must check out before its status can be changed.",
+      });
+    }
+
+    /*
+     * A checked-out booking can only become completed.
+     */
+
+    if (
+      booking.bookingStatus ===
+        "checked-out" &&
+      bookingStatus !== "completed"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A checked-out booking can only be marked as completed",
+      });
+    }
+
+    /*
+     * ==================================================
+     * UPDATE STATUS
+     * ==================================================
+     */
+
     booking.bookingStatus =
       bookingStatus;
 
     await booking.save();
+
+    /*
+     * ==================================================
+     * NOTIFY TRAVELLER
+     * ==================================================
+     */
+
+    let notificationTitle = "";
+    let notificationMessage = "";
+
+    if (
+      bookingStatus === "confirmed"
+    ) {
+      notificationTitle =
+        "Booking confirmed";
+
+      notificationMessage =
+        `Your booking ${booking.bookingReference} has been confirmed by the property.`;
+    }
+
+    if (
+      bookingStatus === "cancelled"
+    ) {
+      notificationTitle =
+        "Booking cancelled";
+
+      notificationMessage =
+        `Your booking ${booking.bookingReference} has been cancelled.`;
+    }
+
+    if (
+      bookingStatus === "completed"
+    ) {
+      notificationTitle =
+        "Booking completed";
+
+      notificationMessage =
+        `Your booking ${booking.bookingReference} has been completed. Thank you for using TripGuard.`;
+    }
+
+    /*
+     * Only send a notification when we have
+     * a meaningful status message.
+     */
+
+    if (
+      notificationTitle &&
+      notificationMessage
+    ) {
+      await createNotification({
+        recipient: booking.guest,
+
+        type: "booking",
+
+        title:
+          notificationTitle,
+
+        message:
+          notificationMessage,
+
+        booking: booking._id,
+
+        accommodation:
+          booking.accommodation?._id ||
+          booking.accommodation,
+
+        priority:
+          bookingStatus === "cancelled"
+            ? "high"
+            : "normal",
+
+        actionUrl:
+          `/traveller/bookings/${booking._id}`,
+      });
+    }
 
     return res.status(200).json({
       success: true,

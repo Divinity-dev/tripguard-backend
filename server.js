@@ -16,6 +16,7 @@ import paymentRoutes from "./routes/paymentRoutes.js";
 import reviewRoutes from "./routes/reviewRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import cookieParser from "cookie-parser";
+import ownerRoutes from "./routes/ownerRoutes.js";
 
 dotenv.config();
 
@@ -32,7 +33,7 @@ const PORT = process.env.PORT || 5000;
 const allowedOrigins = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
-  "http://192.168.75.209:3000",
+  "http://192.168.62.209:3000",
   process.env.FRONTEND_URL,
 ].filter(Boolean);
 
@@ -96,6 +97,8 @@ app.use(cookieParser());
  * API ROUTES
  * ==================================================
  */
+
+app.use("/api/owner", ownerRoutes);
 
 app.use(
   "/api/accommodations",
