@@ -60,7 +60,6 @@ export const createBooking = async (req, res) => {
      */
     const property = await Accommodation.findOne({
       _id: accommodation,
-      status: "approved",
       isAvailable: true,
     });
 
@@ -167,6 +166,36 @@ export const createBooking = async (req, res) => {
           "This accommodation is already booked for those dates",
       });
     }
+
+    /*
+ * ==================================================
+ * PREVENT BOOKING DURING OWNER-UNAVAILABLE DATES
+ * ==================================================
+ *
+ * Owner-blocked dates are separate from Booking
+ * records.
+ *
+ * A booking overlaps an unavailable range when:
+ *
+ * unavailable.startDate < checkOut
+ * AND
+ * unavailable.endDate > checkIn
+ */
+
+const conflictingUnavailableDate =
+  property.unavailableDates?.find(
+    (unavailable) =>
+      unavailable.startDate < checkOut &&
+      unavailable.endDate > checkIn
+  );
+
+if (conflictingUnavailableDate) {
+  return res.status(409).json({
+    success: false,
+    message:
+      "This accommodation is unavailable for the selected dates",
+  });
+}
 
     /*
      * Generate booking reference.

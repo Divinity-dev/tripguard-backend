@@ -8,6 +8,8 @@ import {
   getOwnerAccommodation,
   updateAccommodation,
   deleteAccommodation,
+  addUnavailableDates,
+  removeUnavailableDates,
 } from "../controllers/accommodationsController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -40,6 +42,24 @@ router.get(
   protect,
   authorizeRoles("owner"),
   getOwnerAccommodation
+);
+
+// Owner add unavailable date range
+
+router.post(
+  "/:id/unavailable-dates",
+  protect,
+  authorizeRoles("owner"),
+  addUnavailableDates
+);
+
+// Owner remove unavailable date range
+
+router.delete(
+  "/:id/unavailable-dates/:unavailableDateId",
+  protect,
+  authorizeRoles("owner"),
+  removeUnavailableDates
 );
 
 // Get accommodation by slug

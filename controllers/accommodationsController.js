@@ -106,41 +106,50 @@ const accommodation = await Accommodation.create({
 export const getAccommodations = async (req, res) => {
   try {
     const {
-  search,
-  state,
-  city,
-  lga,
-  type,
-  minPrice,
-  maxPrice,
-  guests,
-  bedrooms,
-  page = 1,
-  limit = 12,
-  sort = "recommended",
-} = req.query;
+      search,
+      state,
+      city,
+      lga,
+      type,
+      minPrice,
+      maxPrice,
+      guests,
+      bedrooms,
+      latitude,
+      longitude,
+      radius = 25,
+      page = 1,
+      limit = 12,
+      sort = "recommended",
+    } = req.query;
 
     const filter = {
-      status: "approved",
       isAvailable: true,
     };
 
+    // ===============================
+    // SEARCH
+    // ===============================
+
     if (search?.trim()) {
-  const searchRegex = {
-    $regex: search.trim(),
-    $options: "i",
-  };
+      const searchRegex = {
+        $regex: search.trim(),
+        $options: "i",
+      };
 
-  filter.$or = [
-    { name: searchRegex },
-    { "location.state": searchRegex },
-    { "location.city": searchRegex },
-    { "location.lga": searchRegex },
-    { type: searchRegex },
-  ];
-}
+      filter.$or = [
+        { name: searchRegex },
+        { "location.state": searchRegex },
+        { "location.city": searchRegex },
+        { "location.lga": searchRegex },
+        { type: searchRegex },
+      ];
+    }
 
-    // LOCATION
+    // ===============================
+    // LOCATION FILTERS
+    // ===============================
+
     if (state) {
       filter["location.state"] = {
         $regex: state.trim(),
@@ -162,12 +171,18 @@ export const getAccommodations = async (req, res) => {
       };
     }
 
+    // ===============================
     // ACCOMMODATION TYPE
+    // ===============================
+
     if (type) {
       filter.type = type;
     }
 
+    // ===============================
     // PRICE
+    // ===============================
+
     if (minPrice || maxPrice) {
       filter.pricePerNight = {};
 
@@ -180,75 +195,315 @@ export const getAccommodations = async (req, res) => {
       }
     }
 
+    // ===============================
     // GUESTS
+    // ===============================
+
     if (guests) {
       filter.maxGuests = {
         $gte: Number(guests),
       };
     }
 
+    // ===============================
     // BEDROOMS
+    // ===============================
+
     if (bedrooms) {
       filter.bedrooms = {
         $gte: Number(bedrooms),
       };
     }
 
+    // ===============================
     // PAGINATION
-    const currentPage = Math.max(Number(page) || 1, 1);
+    // ===============================
+
+    const currentPage = Math.max(
+      Number(page) || 1,
+      1
+    );
+
     const itemsPerPage = Math.min(
       Math.max(Number(limit) || 12, 1),
       50
     );
 
-    const skip = (currentPage - 1) * itemsPerPage;
+    const skip =
+      (currentPage - 1) * itemsPerPage;
 
-    // SORTING
-    let sortOption = { createdAt: -1 };
+    // ===============================
+    // GEOLOCATION
+    // ===============================
 
-    if (sort === "price-low") {
-      sortOption = { pricePerNight: 1 };
+    const parsedLatitude = Number(latitude);
+    const parsedLongitude = Number(longitude);
+
+    const hasCoordinates =
+      latitude !== undefined &&
+      longitude !== undefined &&
+      Number.isFinite(parsedLatitude) &&
+      Number.isFinite(parsedLongitude) &&
+      parsedLatitude >= -90 &&
+      parsedLatitude <= 90 &&
+      parsedLongitude >= -180 &&
+      parsedLongitude <= 180;
+
+    const searchRadius = Math.min(
+      Math.max(Number(radius) || 25, 1),
+      100
+    );
+
+    let accommodations;
+    let total;
+
+    // ===============================
+    // GEOLOCATION SEARCH
+    // ===============================
+
+    if (hasCoordinates) {
+      /*
+       * Calculate distance using the Haversine formula.
+       *
+       * Earth radius = 6371 km.
+       */
+
+      const distanceExpression = {
+        $multiply: [
+          6371,
+          {
+            $acos: {
+              $max: [
+                -1,
+                {
+                  $min: [
+                    1,
+                    {
+                      $add: [
+                        {
+                          $multiply: [
+                            {
+                              $cos: {
+                                $degreesToRadians:
+                                  parsedLatitude,
+                              },
+                            },
+                            {
+                              $cos: {
+                                $degreesToRadians:
+                                  "$location.coordinates.latitude",
+                              },
+                            },
+                            {
+                              $cos: {
+                                $subtract: [
+                                  {
+                                    $degreesToRadians:
+                                      "$location.coordinates.longitude",
+                                  },
+                                  {
+                                    $degreesToRadians:
+                                      parsedLongitude,
+                                  },
+                                ],
+                              },
+                            },
+                          ],
+                        },
+                        {
+                          $multiply: [
+                            {
+                              $sin: {
+                                $degreesToRadians:
+                                  parsedLatitude,
+                              },
+                            },
+                            {
+                              $sin: {
+                                $degreesToRadians:
+                                  "$location.coordinates.latitude",
+                              },
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      };
+
+      const pipeline = [
+        {
+          $match: {
+            ...filter,
+
+            "location.coordinates.latitude": {
+              $exists: true,
+              $ne: null,
+            },
+
+            "location.coordinates.longitude": {
+              $exists: true,
+              $ne: null,
+            },
+          },
+        },
+
+        {
+          $addFields: {
+            distance: distanceExpression,
+          },
+        },
+
+        {
+          $match: {
+            distance: {
+              $lte: searchRadius,
+            },
+          },
+        },
+
+        {
+          $sort: {
+            distance: 1,
+          },
+        },
+
+        {
+          $facet: {
+            metadata: [
+              {
+                $count: "total",
+              },
+            ],
+
+            accommodations: [
+              {
+                $skip: skip,
+              },
+              {
+                $limit: itemsPerPage,
+              },
+            ],
+          },
+        },
+      ];
+
+      const result =
+        await Accommodation.aggregate(
+          pipeline
+        );
+
+      total =
+        result[0]?.metadata?.[0]?.total || 0;
+
+      accommodations =
+        result[0]?.accommodations || [];
+
+      // Aggregate does not automatically populate.
+      await Accommodation.populate(
+        accommodations,
+        {
+          path: "owner",
+          select:
+            "firstName lastName profileImage",
+        }
+      );
+    } else {
+      // ===============================
+      // NORMAL SEARCH
+      // ===============================
+
+      let sortOption = {
+        createdAt: -1,
+      };
+
+      if (sort === "price-low") {
+        sortOption = {
+          pricePerNight: 1,
+        };
+      }
+
+      if (sort === "price-high") {
+        sortOption = {
+          pricePerNight: -1,
+        };
+      }
+
+      if (sort === "rating") {
+        sortOption = {
+          averageRating: -1,
+        };
+      }
+
+      total =
+        await Accommodation.countDocuments(
+          filter
+        );
+
+      accommodations =
+        await Accommodation.find(filter)
+          .populate(
+            "owner",
+            "firstName lastName profileImage"
+          )
+          .sort(sortOption)
+          .skip(skip)
+          .limit(itemsPerPage);
     }
 
-    if (sort === "price-high") {
-      sortOption = { pricePerNight: -1 };
-    }
+    // ===============================
+    // PAGINATION
+    // ===============================
 
-    if (sort === "rating") {
-      sortOption = { averageRating: -1 };
-    }
+    const totalPages = Math.ceil(
+      total / itemsPerPage
+    );
 
-    // TOTAL COUNT
-    const total = await Accommodation.countDocuments(filter);
-
-    // ACCOMMODATIONS
-    const accommodations = await Accommodation.find(filter)
-      .populate("owner", "firstName lastName profileImage")
-      .sort(sortOption)
-      .skip(skip)
-      .limit(itemsPerPage);
-
-    const totalPages = Math.ceil(total / itemsPerPage);
+    // ===============================
+    // RESPONSE
+    // ===============================
 
     res.status(200).json({
       success: true,
+
       count: accommodations.length,
+
       accommodations,
+
       pagination: {
         page: currentPage,
         limit: itemsPerPage,
         total,
         totalPages,
-        hasNextPage: currentPage < totalPages,
-        hasPreviousPage: currentPage > 1,
+        hasNextPage:
+          currentPage < totalPages,
+        hasPreviousPage:
+          currentPage > 1,
       },
+
+      locationSearch: hasCoordinates
+        ? {
+            latitude: parsedLatitude,
+            longitude: parsedLongitude,
+            radius: searchRadius,
+          }
+        : null,
     });
   } catch (error) {
-    console.error("Get accommodations error:", error);
+    console.error(
+      "Get accommodations error:",
+      error
+    );
 
     res.status(500).json({
       success: false,
-      message: "Unable to retrieve accommodations",
+      message:
+        "Unable to retrieve accommodations",
     });
   }
 };
@@ -482,6 +737,214 @@ export const getOwnerAccommodation = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Unable to retrieve your accommodation",
+    });
+  }
+};
+
+/*
+ * ==================================================
+ * ADD UNAVAILABLE DATE RANGE
+ * ==================================================
+ *
+ * Owner only.
+ *
+ * The end date is exclusive.
+ *
+ * Example:
+ *
+ * startDate: August 25
+ * endDate: August 28
+ *
+ * Blocks August 25, 26 and 27.
+ */
+
+export const addUnavailableDates = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      startDate,
+      endDate,
+      reason,
+    } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Start date and end date are required",
+      });
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    if (
+      Number.isNaN(start.getTime()) ||
+      Number.isNaN(end.getTime())
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid unavailable dates",
+      });
+    }
+
+    if (end <= start) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "End date must be after start date",
+      });
+    }
+
+    const accommodation =
+      await Accommodation.findOne({
+        _id: req.params.id,
+        owner: req.user.id,
+      });
+
+    if (!accommodation) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Accommodation not found or you are not the owner",
+      });
+    }
+
+    /*
+     * ==================================================
+     * PREVENT OVERLAPPING OWNER BLOCKS
+     * ==================================================
+     *
+     * Two ranges overlap when:
+     *
+     * existing.start < new.end
+     * AND
+     * existing.end > new.start
+     */
+
+    const hasOverlap =
+      accommodation.unavailableDates.some(
+        (unavailable) =>
+          unavailable.startDate < end &&
+          unavailable.endDate > start
+      );
+
+    if (hasOverlap) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "This date range overlaps an existing unavailable period",
+      });
+    }
+
+    /*
+     * ==================================================
+     * ADD RANGE
+     * ==================================================
+     */
+
+    accommodation.unavailableDates.push({
+      startDate: start,
+      endDate: end,
+      reason: reason?.trim() || "",
+    });
+
+    await accommodation.save();
+
+    const addedDate =
+      accommodation.unavailableDates[
+        accommodation.unavailableDates.length - 1
+      ];
+
+    return res.status(201).json({
+      success: true,
+      message:
+        "Unavailable dates added successfully",
+      unavailableDate: addedDate,
+      accommodation,
+    });
+  } catch (error) {
+    console.error(
+      "Add unavailable dates error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Unable to add unavailable dates",
+    });
+  }
+};
+
+
+/*
+ * ==================================================
+ * REMOVE UNAVAILABLE DATE RANGE
+ * ==================================================
+ *
+ * Owner only.
+ */
+
+export const removeUnavailableDates = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      id,
+      unavailableDateId,
+    } = req.params;
+
+    const accommodation =
+      await Accommodation.findOne({
+        _id: id,
+        owner: req.user.id,
+      });
+
+    if (!accommodation) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Accommodation not found or you are not the owner",
+      });
+    }
+
+    const unavailableDate =
+      accommodation.unavailableDates.id(
+        unavailableDateId
+      );
+
+    if (!unavailableDate) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Unavailable date range not found",
+      });
+    }
+
+    unavailableDate.deleteOne();
+
+    await accommodation.save();
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Unavailable dates removed successfully",
+      accommodation,
+    });
+  } catch (error) {
+    console.error(
+      "Remove unavailable dates error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Unable to remove unavailable dates",
     });
   }
 };
