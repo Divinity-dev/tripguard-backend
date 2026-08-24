@@ -124,7 +124,6 @@ export const getAccommodations = async (req, res) => {
     } = req.query;
 
     const filter = {
-      status: "approved",
       isAvailable: true,
     };
 
@@ -738,6 +737,214 @@ export const getOwnerAccommodation = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Unable to retrieve your accommodation",
+    });
+  }
+};
+
+/*
+ * ==================================================
+ * ADD UNAVAILABLE DATE RANGE
+ * ==================================================
+ *
+ * Owner only.
+ *
+ * The end date is exclusive.
+ *
+ * Example:
+ *
+ * startDate: August 25
+ * endDate: August 28
+ *
+ * Blocks August 25, 26 and 27.
+ */
+
+export const addUnavailableDates = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      startDate,
+      endDate,
+      reason,
+    } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Start date and end date are required",
+      });
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    if (
+      Number.isNaN(start.getTime()) ||
+      Number.isNaN(end.getTime())
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid unavailable dates",
+      });
+    }
+
+    if (end <= start) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "End date must be after start date",
+      });
+    }
+
+    const accommodation =
+      await Accommodation.findOne({
+        _id: req.params.id,
+        owner: req.user.id,
+      });
+
+    if (!accommodation) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Accommodation not found or you are not the owner",
+      });
+    }
+
+    /*
+     * ==================================================
+     * PREVENT OVERLAPPING OWNER BLOCKS
+     * ==================================================
+     *
+     * Two ranges overlap when:
+     *
+     * existing.start < new.end
+     * AND
+     * existing.end > new.start
+     */
+
+    const hasOverlap =
+      accommodation.unavailableDates.some(
+        (unavailable) =>
+          unavailable.startDate < end &&
+          unavailable.endDate > start
+      );
+
+    if (hasOverlap) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "This date range overlaps an existing unavailable period",
+      });
+    }
+
+    /*
+     * ==================================================
+     * ADD RANGE
+     * ==================================================
+     */
+
+    accommodation.unavailableDates.push({
+      startDate: start,
+      endDate: end,
+      reason: reason?.trim() || "",
+    });
+
+    await accommodation.save();
+
+    const addedDate =
+      accommodation.unavailableDates[
+        accommodation.unavailableDates.length - 1
+      ];
+
+    return res.status(201).json({
+      success: true,
+      message:
+        "Unavailable dates added successfully",
+      unavailableDate: addedDate,
+      accommodation,
+    });
+  } catch (error) {
+    console.error(
+      "Add unavailable dates error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Unable to add unavailable dates",
+    });
+  }
+};
+
+
+/*
+ * ==================================================
+ * REMOVE UNAVAILABLE DATE RANGE
+ * ==================================================
+ *
+ * Owner only.
+ */
+
+export const removeUnavailableDates = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      id,
+      unavailableDateId,
+    } = req.params;
+
+    const accommodation =
+      await Accommodation.findOne({
+        _id: id,
+        owner: req.user.id,
+      });
+
+    if (!accommodation) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Accommodation not found or you are not the owner",
+      });
+    }
+
+    const unavailableDate =
+      accommodation.unavailableDates.id(
+        unavailableDateId
+      );
+
+    if (!unavailableDate) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Unavailable date range not found",
+      });
+    }
+
+    unavailableDate.deleteOne();
+
+    await accommodation.save();
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Unavailable dates removed successfully",
+      accommodation,
+    });
+  } catch (error) {
+    console.error(
+      "Remove unavailable dates error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Unable to remove unavailable dates",
     });
   }
 };
