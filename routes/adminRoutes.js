@@ -18,6 +18,7 @@ import {
   markAllAdminNotificationsAsRead,
   deleteAdminNotification,
   getAdminReports,
+  sendAdminEmail,
 } from "../controllers/adminController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -41,6 +42,15 @@ router.use(
 router.get(
   "/dashboard",
   getDashboardStats
+);
+
+// ===============================
+// EMAIL CAMPAIGNS
+// ===============================
+
+router.post(
+  "/emails/send",
+  sendAdminEmail
 );
 
 router.get(

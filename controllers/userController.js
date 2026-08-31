@@ -931,3 +931,119 @@ export const updatePaymentAccount = async (
     });
   }
 };
+
+/*
+ * GET NIGERIAN BANKS
+ *
+ * Fetches the current list of Nigerian banks
+ * directly from Paystack.
+ *
+ * This prevents us from maintaining a hardcoded
+ * list of banks and bank codes.
+ */
+export const getNigerianBanks = async (req, res) => {
+  try {
+    if (!process.env.PAYSTACK_SECRET_KEY) {
+      return res.status(500).json({
+        success: false,
+        message: "Paystack is not configured",
+      });
+    }
+
+    const banks = [];
+
+    let nextCursor = null;
+
+    /*
+     * Paystack supports cursor pagination.
+     *
+     * We continue requesting pages until Paystack
+     * tells us there is no next cursor.
+     */
+    do {
+      const params = new URLSearchParams({
+        country: "nigeria",
+        perPage: "100",
+        use_cursor: "true",
+      });
+
+      if (nextCursor) {
+        params.append("next", nextCursor);
+      }
+
+      const paystackResponse = await fetch(
+        `${PAYSTACK_BASE_URL}/bank?${params.toString()}`,
+        {
+          method: "GET",
+          headers: getPaystackHeaders(),
+        }
+      );
+
+      const paystackData =
+        await paystackResponse.json();
+
+      if (
+        !paystackResponse.ok ||
+        !paystackData.status
+      ) {
+        console.error(
+          "Paystack banks request failed:",
+          paystackData
+        );
+
+        return res.status(502).json({
+          success: false,
+          message:
+            "Unable to retrieve Nigerian banks",
+        });
+      }
+
+      if (Array.isArray(paystackData.data)) {
+        banks.push(...paystackData.data);
+      }
+
+      nextCursor =
+        paystackData.meta?.next || null;
+
+    } while (nextCursor);
+
+    /*
+     * Return only the information the frontend
+     * actually needs.
+     *
+     * We also remove inactive/deleted banks.
+     */
+    const formattedBanks = banks
+      .filter(
+        (bank) =>
+          bank.active !== false &&
+          bank.is_deleted !== true
+      )
+      .map((bank) => ({
+        id: bank.id,
+        name: bank.name,
+        code: bank.code,
+        type: bank.type,
+        currency: bank.currency,
+      }))
+      .sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
+
+    return res.status(200).json({
+      success: true,
+      banks: formattedBanks,
+    });
+  } catch (error) {
+    console.error(
+      "Get Nigerian banks error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Unable to retrieve Nigerian banks",
+    });
+  }
+};

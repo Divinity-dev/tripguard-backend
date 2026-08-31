@@ -2161,3 +2161,192 @@ export const deleteAdminNotification =
       });
     }
   };
+
+  // ==========================================================
+// ADMIN SEND EMAIL
+// ==========================================================
+
+export const sendAdminEmail = async (req, res) => {
+  try {
+    const { audience, subject, message } = req.body;
+
+    // ------------------------------------------------------
+    // VALIDATION
+    // ------------------------------------------------------
+
+    if (!audience || !subject || !message) {
+      return res.status(400).json({
+        success: false,
+        message: "Audience, subject and message are required",
+      });
+    }
+
+    const allowedAudiences = [
+      "owners",
+      "travellers",
+      "everyone",
+    ];
+
+    if (!allowedAudiences.includes(audience)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email audience",
+      });
+    }
+
+    // ------------------------------------------------------
+    // FIND RECIPIENTS
+    // ------------------------------------------------------
+
+    let roleFilter;
+
+    if (audience === "owners") {
+      roleFilter = "owner";
+    } else if (audience === "travellers") {
+      roleFilter = "user";
+    } else {
+      roleFilter = {
+        $in: ["user", "owner"],
+      };
+    }
+
+    const users = await User.find({
+      role: roleFilter,
+      isActive: true,
+    }).select("firstName email");
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No active users found for this audience",
+      });
+    }
+
+    // ------------------------------------------------------
+    // SEND EMAILS
+    // ------------------------------------------------------
+
+    let sentCount = 0;
+    let failedCount = 0;
+
+    for (const user of users) {
+      try {
+        await sendEmail({
+          to: user.email,
+          subject: subject.trim(),
+          html: `
+            <div style="
+              font-family: Arial, Helvetica, sans-serif;
+              background-color: #f6f8f7;
+              padding: 40px 20px;
+              color: #172322;
+            ">
+
+              <div style="
+                max-width: 600px;
+                margin: 0 auto;
+                background: #ffffff;
+                border-radius: 16px;
+                overflow: hidden;
+                border: 1px solid #e4e8e6;
+              ">
+
+                <div style="
+                  background: #173C37;
+                  padding: 30px;
+                  text-align: center;
+                ">
+                  <h1 style="
+                    margin: 0;
+                    color: #ffffff;
+                    font-size: 28px;
+                  ">
+                    TripGuard
+                  </h1>
+
+                  <p style="
+                    margin: 8px 0 0;
+                    color: #63E6BE;
+                    font-size: 14px;
+                  ">
+                    Travel with confidence
+                  </p>
+                </div>
+
+                <div style="padding: 35px 30px;">
+
+                  <p style="font-size: 16px;">
+                    Hello ${user.firstName},
+                  </p>
+
+                  <div style="
+                    color: #53635e;
+                    line-height: 1.8;
+                    font-size: 15px;
+                  ">
+                    ${message.replace(/\n/g, "<br />")}
+                  </div>
+
+                  <p style="
+                    margin-top: 30px;
+                    color: #53635e;
+                    line-height: 1.6;
+                  ">
+                    Stay safe,<br />
+                    <strong>The TripGuard Team</strong>
+                  </p>
+
+                </div>
+
+                <div style="
+                  background: #f6f8f7;
+                  padding: 20px 30px;
+                  text-align: center;
+                ">
+                  <p style="
+                    margin: 0;
+                    color: #8a9591;
+                    font-size: 12px;
+                  ">
+                    © ${new Date().getFullYear()} TripGuard.
+                    All rights reserved.
+                  </p>
+                </div>
+
+              </div>
+
+            </div>
+          `,
+        });
+
+        sentCount++;
+      } catch (emailError) {
+        console.error(
+          `Failed to send email to ${user.email}:`,
+          emailError
+        );
+
+        failedCount++;
+      }
+    }
+
+    // ------------------------------------------------------
+    // RESPONSE
+    // ------------------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+      message: "Email campaign completed",
+      sentCount,
+      failedCount,
+      totalRecipients: users.length,
+    });
+  } catch (error) {
+    console.error("Send admin email error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to send emails",
+    });
+  }
+};

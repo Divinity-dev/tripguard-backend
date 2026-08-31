@@ -8,6 +8,7 @@ import {
   setupPaymentAccount,
   getPaymentAccount,
   updatePaymentAccount,
+  getNigerianBanks,
 } from "../controllers/userController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -18,11 +19,27 @@ const router = express.Router();
 router.use(protect);
 
 // Profile
-router.get("/profile", getProfile);
-router.put("/profile", updateProfile);
+router.get(
+  "/profile",
+  getProfile
+);
+
+router.put(
+  "/profile",
+  updateProfile
+);
 
 // Password
-router.put("/change-password", changePassword);
+router.put(
+  "/change-password",
+  changePassword
+);
+
+// Nigerian banks
+router.get(
+  "/banks",
+  getNigerianBanks
+);
 
 // Owner payment account
 router.post(
