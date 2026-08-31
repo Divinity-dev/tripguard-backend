@@ -16,6 +16,17 @@ const generateToken = (userId) => {
   );
 };
 
+const generateVerificationToken = () => {
+  return crypto.randomBytes(32).toString("hex");
+};
+
+const hashVerificationToken = (token) => {
+  return crypto
+    .createHash("sha256")
+    .update(token)
+    .digest("hex");
+};
+
 const sendTokenResponse = (user, statusCode, res, message) => {
   const token = generateToken(user._id);
 
@@ -47,6 +58,8 @@ const sendTokenResponse = (user, statusCode, res, message) => {
       },
     });
 };
+
+
 //register
 export const register = async (req, res) => {
   try {
@@ -62,7 +75,8 @@ export const register = async (req, res) => {
     if (!firstName || !lastName || !email || !password) {
       return res.status(400).json({
         success: false,
-        message: "First name, last name, email and password are required",
+        message:
+          "First name, last name, email and password are required",
       });
     }
 
@@ -83,6 +97,25 @@ export const register = async (req, res) => {
     // Admin accounts should be created separately.
     const userRole = role === "owner" ? "owner" : "user";
 
+    /*
+     * Generate email verification token
+     *
+     * The raw token goes into the email.
+     * Only the hashed token is stored in MongoDB.
+     */
+    const verificationToken = generateVerificationToken();
+
+    const hashedVerificationToken = hashVerificationToken(
+      verificationToken
+    );
+
+    /*
+     * Verification link expires after 24 hours.
+     */
+    const verificationTokenExpires = new Date(
+      Date.now() + 24 * 60 * 60 * 1000
+    );
+
     const user = await User.create({
       firstName: firstName.trim(),
       lastName: lastName.trim(),
@@ -90,18 +123,243 @@ export const register = async (req, res) => {
       password,
       phone: phone?.trim() || "",
       role: userRole,
+
+      isVerified: false,
+
+      verificationToken: hashedVerificationToken,
+      verificationTokenExpires,
     });
 
-    sendTokenResponse(user, 201, res, "Account created successfully");
+    /*
+     * Role-specific instructions
+     */
+    const roleContent =
+      userRole === "owner"
+        ? {
+            title: "Welcome to TripGuard as an Accommodation Owner",
+            intro:
+              "TripGuard helps accommodation owners connect with guests while making stays safer and easier to manage.",
+            steps: [
+              "Complete your owner profile.",
+              "Add your accommodation with accurate details, photos, amenities and pricing.",
+              "Keep your accommodation availability up to date.",
+              "Manage incoming bookings from your dashboard.",
+              "Prepare your guests for a safe and comfortable stay.",
+            ],
+          }
+        : {
+            title: "Welcome to TripGuard",
+            intro:
+              "TripGuard helps you discover accommodation and enjoy a safer, more confident travel experience.",
+            steps: [
+              "Complete your profile.",
+              "Search for accommodation based on your needs and location.",
+              "Review accommodation details, amenities and pricing.",
+              "Make your booking through TripGuard.",
+              "Use TripGuard's safety features to keep your loved ones informed during your stay.",
+            ],
+          };
+
+    const verificationUrl =
+  `${process.env.BACKEND_URL}/api/auth/verify-email?token=${verificationToken}&email=${encodeURIComponent(
+    user.email
+  )}`;
+
+    await sendEmail({
+      to: user.email,
+      subject: "Verify your TripGuard account",
+      html: `
+        <div style="
+          font-family: Arial, Helvetica, sans-serif;
+          background-color: #f6f8f7;
+          padding: 40px 20px;
+          color: #172322;
+        ">
+
+          <div style="
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid #e4e8e6;
+          ">
+
+            <div style="
+              background: #173C37;
+              padding: 30px;
+              text-align: center;
+            ">
+              <h1 style="
+                margin: 0;
+                color: #ffffff;
+                font-size: 28px;
+              ">
+                TripGuard
+              </h1>
+
+              <p style="
+                margin: 8px 0 0;
+                color: #63E6BE;
+                font-size: 14px;
+              ">
+                Travel with confidence
+              </p>
+            </div>
+
+            <div style="padding: 35px 30px;">
+
+              <p style="font-size: 16px;">
+                Hello ${user.firstName},
+              </p>
+
+              <h2 style="
+                color: #173C37;
+                font-size: 22px;
+                margin-top: 25px;
+              ">
+                ${roleContent.title}
+              </h2>
+
+              <p style="
+                color: #5f6d68;
+                line-height: 1.7;
+                font-size: 15px;
+              ">
+                ${roleContent.intro}
+              </p>
+
+              <p style="
+                color: #5f6d68;
+                line-height: 1.7;
+                font-size: 15px;
+              ">
+                Before you can use your account, please verify your email
+                address by clicking the button below.
+              </p>
+
+              <div style="
+                text-align: center;
+                margin: 30px 0;
+              ">
+                <a
+                  href="${verificationUrl}"
+                  style="
+                    display: inline-block;
+                    background: #173C37;
+                    color: #ffffff;
+                    text-decoration: none;
+                    padding: 14px 26px;
+                    border-radius: 10px;
+                    font-weight: bold;
+                    font-size: 15px;
+                  "
+                >
+                  Verify My Account
+                </a>
+              </div>
+
+              <div style="
+                background: #E1F5ED;
+                border-radius: 12px;
+                padding: 20px;
+                margin-top: 30px;
+              ">
+
+                <h3 style="
+                  margin-top: 0;
+                  color: #173C37;
+                  font-size: 17px;
+                ">
+                  How to use TripGuard
+                </h3>
+
+                <ol style="
+                  color: #53635e;
+                  line-height: 1.8;
+                  padding-left: 20px;
+                  font-size: 14px;
+                ">
+                  ${roleContent.steps
+                    .map((step) => `<li>${step}</li>`)
+                    .join("")}
+                </ol>
+
+              </div>
+
+              <p style="
+                color: #7b8783;
+                font-size: 13px;
+                line-height: 1.6;
+                margin-top: 30px;
+              ">
+                This verification link will expire in
+                <strong>24 hours</strong>.
+              </p>
+
+              <p style="
+                color: #7b8783;
+                font-size: 13px;
+                line-height: 1.6;
+              ">
+                If you did not create a TripGuard account, you can safely
+                ignore this email.
+              </p>
+
+              <p style="
+                margin-top: 30px;
+                color: #53635e;
+                line-height: 1.6;
+              ">
+                Stay safe,<br />
+                <strong>The TripGuard Team</strong>
+              </p>
+
+            </div>
+
+            <div style="
+              background: #f6f8f7;
+              padding: 20px 30px;
+              text-align: center;
+            ">
+              <p style="
+                margin: 0;
+                color: #8a9591;
+                font-size: 12px;
+              ">
+                © ${new Date().getFullYear()} TripGuard. All rights reserved.
+              </p>
+            </div>
+
+          </div>
+
+        </div>
+      `,
+    });
+
+    /*
+     * IMPORTANT:
+     * Do NOT log the verification token.
+     * Do NOT send a JWT yet.
+     *
+     * The account must first be verified.
+     */
+    return res.status(201).json({
+      success: true,
+      message:
+        "Account created successfully. Please check your email to verify your account.",
+      emailVerificationRequired: true,
+    });
   } catch (error) {
     console.error("Register error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Unable to create account",
     });
   }
 };
+
 //login
 export const login = async (req, res) => {
   try {
@@ -142,6 +400,15 @@ export const login = async (req, res) => {
         message: "Invalid email or password",
       });
     }
+
+    if (!user.isVerified) {
+  return res.status(403).json({
+    success: false,
+    message:
+      "Please verify your email address before logging in.",
+    emailVerificationRequired: true,
+  });
+}
 
     user.lastLogin = new Date();
     await user.save();
@@ -495,6 +762,260 @@ export const resetPassword = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to reset password",
+    });
+  }
+};
+
+export const verifyEmail = async (req, res) => {
+  try {
+    const { token, email } = req.query;
+
+    if (!token || !email) {
+      return res.redirect(
+        `${process.env.CLIENT_URL}/login?verification=invalid`
+      );
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const hashedToken = hashVerificationToken(token);
+
+    const user = await User.findOne({
+      email: normalizedEmail,
+    }).select(
+      "+verificationToken +verificationTokenExpires"
+    );
+
+    if (!user) {
+      return res.redirect(
+        `${process.env.CLIENT_URL}/login?verification=not-found`
+      );
+    }
+
+    if (user.isVerified) {
+      return res.redirect(
+        `${process.env.CLIENT_URL}/login?verified=already`
+      );
+    }
+
+    if (
+      !user.verificationToken ||
+      !user.verificationTokenExpires
+    ) {
+      return res.redirect(
+        `${process.env.CLIENT_URL}/login?verification=invalid`
+      );
+    }
+
+    if (user.verificationTokenExpires < new Date()) {
+      return res.redirect(
+        `${process.env.CLIENT_URL}/login?verification=expired`
+      );
+    }
+
+    if (user.verificationToken !== hashedToken) {
+      return res.redirect(
+        `${process.env.CLIENT_URL}/login?verification=invalid`
+      );
+    }
+
+    // =========================
+    // VERIFY ACCOUNT
+    // =========================
+
+    user.isVerified = true;
+
+    user.verificationToken = undefined;
+    user.verificationTokenExpires = undefined;
+
+    await user.save();
+
+    // =========================
+    // SEND USER TO LOGIN
+    // =========================
+
+    return res.redirect(
+      `${process.env.CLIENT_URL}/login?verified=true`
+    );
+  } catch (error) {
+    console.error("Verify email error:", error);
+
+    return res.redirect(
+      `${process.env.CLIENT_URL}/login?verification=error`
+    );
+  }
+};
+
+export const resendVerificationEmail = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required",
+      });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const user = await User.findOne({
+      email: normalizedEmail,
+    }).select(
+      "+verificationToken +verificationTokenExpires"
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "No TripGuard account was found with this email address.",
+      });
+    }
+
+    if (user.isVerified) {
+      return res.status(400).json({
+        success: false,
+        message: "This account has already been verified.",
+      });
+    }
+
+    const verificationToken = generateVerificationToken();
+
+    const hashedVerificationToken =
+      hashVerificationToken(verificationToken);
+
+    user.verificationToken = hashedVerificationToken;
+
+    user.verificationTokenExpires = new Date(
+      Date.now() + 24 * 60 * 60 * 1000
+    );
+
+    await user.save();
+
+   const verificationUrl =
+  `${process.env.BACKEND_URL}/api/auth/verify-email?token=${verificationToken}&email=${encodeURIComponent(
+    user.email
+  )}`;
+
+    const roleInstructions =
+      user.role === "owner"
+        ? `
+          <li>Complete your owner profile.</li>
+          <li>Add and manage your accommodation.</li>
+          <li>Keep availability and property information updated.</li>
+          <li>Manage guest bookings from your dashboard.</li>
+        `
+        : `
+          <li>Complete your profile.</li>
+          <li>Search for suitable accommodation.</li>
+          <li>Review property details before booking.</li>
+          <li>Manage your bookings from your dashboard.</li>
+          <li>Use TripGuard's safety features during your stay.</li>
+        `;
+
+    await sendEmail({
+      to: user.email,
+      subject: "Verify your TripGuard account",
+      html: `
+        <div style="
+          font-family: Arial, Helvetica, sans-serif;
+          max-width: 600px;
+          margin: 0 auto;
+          padding: 30px;
+          color: #172322;
+        ">
+
+          <div style="
+            background: #173C37;
+            padding: 25px;
+            text-align: center;
+            border-radius: 12px 12px 0 0;
+          ">
+            <h1 style="color: white; margin: 0;">
+              TripGuard
+            </h1>
+          </div>
+
+          <div style="
+            padding: 30px;
+            border: 1px solid #e4e8e6;
+            border-top: none;
+          ">
+
+            <p>Hello ${user.firstName},</p>
+
+            <p style="line-height: 1.7;">
+              Here is your new TripGuard email verification link.
+              Click the button below to verify your account.
+            </p>
+
+            <div style="text-align: center; margin: 30px 0;">
+              <a
+                href="${verificationUrl}"
+                style="
+                  display: inline-block;
+                  background: #173C37;
+                  color: white;
+                  text-decoration: none;
+                  padding: 14px 25px;
+                  border-radius: 10px;
+                  font-weight: bold;
+                "
+              >
+                Verify My Account
+              </a>
+            </div>
+
+            <div style="
+              background: #E1F5ED;
+              padding: 20px;
+              border-radius: 10px;
+            ">
+
+              <h3 style="color: #173C37;">
+                Getting started with TripGuard
+              </h3>
+
+              <ol style="
+                color: #53635e;
+                line-height: 1.8;
+              ">
+                ${roleInstructions}
+              </ol>
+
+            </div>
+
+            <p style="
+              color: #7b8783;
+              font-size: 13px;
+              margin-top: 25px;
+            ">
+              This verification link expires in
+              <strong>24 hours</strong>.
+            </p>
+
+            <p style="margin-top: 25px;">
+              Stay safe,<br />
+              <strong>The TripGuard Team</strong>
+            </p>
+
+          </div>
+        </div>
+      `,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "A new verification email has been sent to your email address.",
+    });
+  } catch (error) {
+    console.error("Resend verification email error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Unable to resend verification email",
     });
   }
 };

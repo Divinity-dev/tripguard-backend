@@ -8,6 +8,8 @@ import {
   forgotPassword,
   verifyResetOtp,
   resetPassword,
+  verifyEmail,
+  resendVerificationEmail,
 } from "../controllers/authController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -17,6 +19,13 @@ const router = express.Router();
 // Public routes
 router.post("/register", register);
 router.post("/login", login);
+
+router.get("/verify-email", verifyEmail);
+
+router.post(
+  "/resend-verification",
+  resendVerificationEmail
+);
 
 // Protected routes
 router.post("/logout", protect, logout);
