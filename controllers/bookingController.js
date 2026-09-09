@@ -133,39 +133,41 @@ export const createBooking = async (req, res) => {
       accommodationAmount + serviceFee;
 
     /*
-     * ==================================================
-     * PREVENT DOUBLE BOOKING
-     * ==================================================
-     *
-     * Pending, confirmed and checked-in bookings
-     * block the selected dates.
-     */
+ * ==================================================
+ * PREVENT DOUBLE BOOKING
+ * ==================================================
+ *
+ * Only confirmed and checked-in bookings
+ * block the selected dates.
+ *
+ * Pending bookings do NOT block dates because
+ * payment has not yet been completed.
+ */
 
     const conflictingBooking =
-      await Booking.findOne({
-        accommodation,
-        bookingStatus: {
-          $in: [
-            "pending",
-            "confirmed",
-            "checked-in",
-          ],
-        },
-        checkInDate: {
-          $lt: checkOut,
-        },
-        checkOutDate: {
-          $gt: checkIn,
-        },
-      });
+  await Booking.findOne({
+    accommodation,
+    bookingStatus: {
+      $in: [
+        "confirmed",
+        "checked-in",
+      ],
+    },
+    checkInDate: {
+      $lt: checkOut,
+    },
+    checkOutDate: {
+      $gt: checkIn,
+    },
+  });
 
-    if (conflictingBooking) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "This accommodation is already booked for those dates",
-      });
-    }
+  if (conflictingBooking) {
+  return res.status(409).json({
+    success: false,
+    message:
+      "These dates have already been booked. Please select different dates.",
+  });
+}
 
     /*
  * ==================================================
@@ -1423,23 +1425,21 @@ export const checkOutBooking = async (
  * confirmed → checked-in
  * checked-in → checked-out
  */
-
 export const updateBookingStatus = async (
   req,
   res
 ) => {
   try {
-    const {
-      bookingStatus,
-    } = req.body;
+    const { bookingStatus } = req.body;
 
     /*
      * ==================================================
      * ALLOWED ADMIN / OWNER STATUSES
      * ==================================================
      *
-     * Notice that checked-in and checked-out
-     * are intentionally NOT here.
+     * checked-in and checked-out are intentionally
+     * excluded. Those transitions are controlled by
+     * checkInBooking() and checkOutBooking().
      */
 
     const allowedStatuses = [
@@ -1449,11 +1449,7 @@ export const updateBookingStatus = async (
       "completed",
     ];
 
-    if (
-      !allowedStatuses.includes(
-        bookingStatus
-      )
-    ) {
+    if (!allowedStatuses.includes(bookingStatus)) {
       return res.status(400).json({
         success: false,
         message:
@@ -1467,13 +1463,12 @@ export const updateBookingStatus = async (
      * ==================================================
      */
 
-    const booking =
-      await Booking.findById(
-        req.params.id
-      ).populate(
-        "accommodation",
-        "owner name"
-      );
+    const booking = await Booking.findById(
+      req.params.id
+    ).populate(
+      "accommodation",
+      "owner name unavailableDates"
+    );
 
     if (!booking) {
       return res.status(404).json({
@@ -1489,8 +1484,7 @@ export const updateBookingStatus = async (
      */
 
     const isOwner =
-      booking.accommodation?.owner
-        ?.toString() ===
+      booking.accommodation?.owner?.toString() ===
       req.user.id.toString();
 
     const isAdmin =
@@ -1508,14 +1502,9 @@ export const updateBookingStatus = async (
      * ==================================================
      * COMPLETED BOOKING
      * ==================================================
-     *
-     * Once completed, it cannot be modified.
      */
 
-    if (
-      booking.bookingStatus ===
-      "completed"
-    ) {
+    if (booking.bookingStatus === "completed") {
       return res.status(400).json({
         success: false,
         message:
@@ -1528,15 +1517,25 @@ export const updateBookingStatus = async (
      * CONFIRM BOOKING
      * ==================================================
      *
-     * Payment MUST be completed first.
+     * A booking must:
+     *
+     * 1. Be paid
+     * 2. Currently be pending
+     * 3. Not conflict with another CONFIRMED booking
+     * 4. Not conflict with a CHECKED-IN booking
+     * 5. Not conflict with owner-blocked dates
+     *
+     * IMPORTANT:
+     *
+     * Pending bookings DO NOT block dates.
      */
 
-    if (
-      bookingStatus === "confirmed"
-    ) {
-      if (
-        booking.paymentStatus !== "paid"
-      ) {
+    if (bookingStatus === "confirmed") {
+      /*
+       * Payment must be completed first.
+       */
+
+      if (booking.paymentStatus !== "paid") {
         return res.status(400).json({
           success: false,
           message:
@@ -1548,14 +1547,93 @@ export const updateBookingStatus = async (
        * Only pending bookings can be confirmed.
        */
 
-      if (
-        booking.bookingStatus !==
-        "pending"
-      ) {
+      if (booking.bookingStatus !== "pending") {
         return res.status(400).json({
           success: false,
           message:
             "Only pending bookings can be confirmed",
+        });
+      }
+
+      /*
+       * ==================================================
+       * RECHECK BOOKING DATE AVAILABILITY
+       * ==================================================
+       *
+       * Only confirmed and checked-in bookings block
+       * dates.
+       *
+       * The current booking is excluded using _id: $ne
+       * so it cannot conflict with itself.
+       */
+
+      const conflictingBooking =
+        await Booking.findOne({
+          accommodation:
+            booking.accommodation?._id ||
+            booking.accommodation,
+
+          _id: {
+            $ne: booking._id,
+          },
+
+          bookingStatus: {
+            $in: [
+              "confirmed",
+              "checked-in",
+            ],
+          },
+
+          checkInDate: {
+            $lt: booking.checkOutDate,
+          },
+
+          checkOutDate: {
+            $gt: booking.checkInDate,
+          },
+        });
+
+      if (conflictingBooking) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "These dates have already been booked by another traveller. This booking cannot be confirmed.",
+        });
+      }
+
+      /*
+       * ==================================================
+       * CHECK OWNER-BLOCKED DATES
+       * ==================================================
+       */
+
+      const conflictingUnavailableDate =
+        booking.accommodation?.unavailableDates?.find(
+          (unavailable) => {
+            const unavailableStart =
+              new Date(
+                unavailable.startDate
+              );
+
+            const unavailableEnd =
+              new Date(
+                unavailable.endDate
+              );
+
+            return (
+              unavailableStart <
+                booking.checkOutDate &&
+              unavailableEnd >
+                booking.checkInDate
+            );
+          }
+        );
+
+      if (conflictingUnavailableDate) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "These dates have been blocked by the property owner and cannot be confirmed.",
         });
       }
     }
@@ -1565,15 +1643,13 @@ export const updateBookingStatus = async (
      * CANCEL BOOKING
      * ==================================================
      *
-     * The owner/admin status endpoint can cancel
-     * pending or confirmed bookings.
+     * Owners/admins can cancel pending or confirmed
+     * bookings.
      *
-     * It cannot cancel a stay that has already started.
+     * They cannot cancel an active or completed stay.
      */
 
-    if (
-      bookingStatus === "cancelled"
-    ) {
+    if (bookingStatus === "cancelled") {
       if (
         booking.bookingStatus ===
           "checked-in" ||
@@ -1611,19 +1687,10 @@ export const updateBookingStatus = async (
      * COMPLETE BOOKING
      * ==================================================
      *
-     * A booking can only become completed
-     * AFTER the traveller has checked out.
-     *
-     * This means:
-     *
-     * checked-out → completed
-     *
-     * is allowed.
+     * Only checked-out bookings can become completed.
      */
 
-    if (
-      bookingStatus === "completed"
-    ) {
+    if (bookingStatus === "completed") {
       if (
         booking.bookingStatus !==
         "checked-out"
@@ -1689,9 +1756,7 @@ export const updateBookingStatus = async (
     let notificationTitle = "";
     let notificationMessage = "";
 
-    if (
-      bookingStatus === "confirmed"
-    ) {
+    if (bookingStatus === "confirmed") {
       notificationTitle =
         "Booking confirmed";
 
@@ -1699,9 +1764,7 @@ export const updateBookingStatus = async (
         `Your booking ${booking.bookingReference} has been confirmed by the property.`;
     }
 
-    if (
-      bookingStatus === "cancelled"
-    ) {
+    if (bookingStatus === "cancelled") {
       notificationTitle =
         "Booking cancelled";
 
@@ -1709,9 +1772,7 @@ export const updateBookingStatus = async (
         `Your booking ${booking.bookingReference} has been cancelled.`;
     }
 
-    if (
-      bookingStatus === "completed"
-    ) {
+    if (bookingStatus === "completed") {
       notificationTitle =
         "Booking completed";
 
@@ -1733,11 +1794,9 @@ export const updateBookingStatus = async (
 
         type: "booking",
 
-        title:
-          notificationTitle,
+        title: notificationTitle,
 
-        message:
-          notificationMessage,
+        message: notificationMessage,
 
         booking: booking._id,
 
@@ -1755,6 +1814,12 @@ export const updateBookingStatus = async (
       });
     }
 
+    /*
+     * ==================================================
+     * RESPONSE
+     * ==================================================
+     */
+
     return res.status(200).json({
       success: true,
       message:
@@ -1771,6 +1836,99 @@ export const updateBookingStatus = async (
       success: false,
       message:
         "Unable to update booking status",
+    });
+  }
+};
+
+export const checkBookingAvailability = async (req, res) => {
+  try {
+    const { accommodation, checkInDate, checkOutDate } = req.query;
+
+    if (!accommodation || !checkInDate || !checkOutDate) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Accommodation, check-in date, and check-out date are required.",
+      });
+    }
+
+    const property = await Accommodation.findById(accommodation);
+
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: "Accommodation not found.",
+      });
+    }
+
+    const checkIn = new Date(checkInDate);
+    const checkOut = new Date(checkOutDate);
+
+    if (Number.isNaN(checkIn.getTime()) || Number.isNaN(checkOut.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid booking dates.",
+      });
+    }
+
+    if (checkOut <= checkIn) {
+      return res.status(400).json({
+        success: false,
+        message: "Check-out date must be after check-in date.",
+      });
+    }
+
+    // Only CONFIRMED and CHECKED-IN bookings block dates.
+    // PENDING bookings do NOT block dates.
+    const conflictingBooking = await Booking.findOne({
+      accommodation,
+      bookingStatus: { $in: ["confirmed", "checked-in"] },
+      checkInDate: { $lt: checkOut },
+      checkOutDate: { $gt: checkIn },
+    });
+
+    if (conflictingBooking) {
+      return res.status(200).json({
+        success: true,
+        available: false,
+        message:
+          "These dates have already been booked. Please select different dates.",
+      });
+    }
+
+    // Check owner-blocked dates as well.
+    const conflictingUnavailableDate = property.unavailableDates?.find(
+      (unavailable) => {
+        const unavailableStart = new Date(unavailable.startDate);
+        const unavailableEnd = new Date(unavailable.endDate);
+
+        return (
+          unavailableStart < checkOut &&
+          unavailableEnd > checkIn
+        );
+      }
+    );
+
+    if (conflictingUnavailableDate) {
+      return res.status(200).json({
+        success: true,
+        available: false,
+        message:
+          "This accommodation is unavailable for the selected dates.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      available: true,
+      message: "The selected dates are available.",
+    });
+  } catch (error) {
+    console.error("Check booking availability error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to check booking availability.",
     });
   }
 };

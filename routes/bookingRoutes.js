@@ -9,6 +9,7 @@ import {
   updateBookingStatus,
   checkInBooking,
   checkOutBooking,
+  checkBookingAvailability,
 } from "../controllers/bookingController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -16,10 +17,15 @@ import { authorizeRoles } from "../middleware/roleMiddleware.js";
 
 const router = express.Router();
 
-// All booking routes require authentication
+// Availability is public.
+// Users should be able to check dates before completing authentication/booking.
+router.get("/availability", checkBookingAvailability);
+
+// All other booking routes require authentication
 router.use(protect);
 
 // Traveller routes
+
 router.post("/", authorizeRoles("user"), createBooking);
 
 router.get(
@@ -57,10 +63,11 @@ router.put(
 );
 
 // Owner route
+
 router.put(
   "/:id/status",
   authorizeRoles("owner"),
   updateBookingStatus
 );
 
-export default router
+export default router;
