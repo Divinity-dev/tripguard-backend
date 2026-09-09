@@ -7,7 +7,7 @@ import createNotification from "../utils/createNotification.js";
 
 const PAYSTACK_BASE_URL = "https://api.paystack.co";
 
-const TRIPGUARD_COMMISSION_RATE = 10;
+const TRIPGUARD_COMMISSION_RATE = 5;
 
 /*
  * ==================================================
@@ -32,17 +32,17 @@ const generateReference = () => {
  * ==================================================
  *
  * The booking total already includes TripGuard's
- * 10% commission.
+ * 5% commission.
  *
  * Example:
  *
  * Accommodation price = ₦85,000
- * TripGuard commission = ₦8,500
+ * TripGuard commission = ₦4,250
  * Customer pays = ₦93,500
  *
  * Therefore:
  *
- * ownerAmount = customerAmount / 1.10
+ * ownerAmount = customerAmount / 1.05
  */
 
 const calculatePaymentSplit = (customerAmount) => {
@@ -908,17 +908,6 @@ export const initializePayment = async (
         success: false,
         message:
           "The accommodation associated with this booking could not be found",
-      });
-    }
-
-    if (
-      booking.accommodation.status !==
-      "approved"
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "This accommodation is not currently approved for bookings",
       });
     }
 
