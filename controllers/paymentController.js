@@ -36,9 +36,9 @@ const generateReference = () => {
  *
  * Example:
  *
- * Accommodation price = ₦85,000
- * TripGuard commission = ₦4,250
- * Customer pays = ₦93,500
+ * Accommodation price = ₦100,000
+ * TripGuard commission = ₦5000
+ * Customer pays = ₦105,000
  *
  * Therefore:
  *

@@ -13,6 +13,7 @@ import bookingRoutes from "./routes/bookingRoutes.js";
 import contactRoutes from "./routes/contactRoutes.js";
 import notificationsRoutes from "./routes/notificationRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
+import { handlePaystackWebhook } from "./controllers/paymentController.js";
 import reviewRoutes from "./routes/reviewRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import cookieParser from "cookie-parser";
@@ -76,6 +77,19 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+
+/*
+ * PAYSTACK WEBHOOK
+ *
+ * Must receive the raw request body before
+ * express.json() parses it.
+ */
+app.post(
+  "/api/payments/webhook",
+  express.raw({ type: "application/json" }),
+  handlePaystackWebhook
+);
 
 /*
  * ==================================================

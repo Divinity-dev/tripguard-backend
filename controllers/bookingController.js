@@ -3,7 +3,7 @@ import Accommodation from "../models/accommodations.js";
 import { sendEmail } from "../utils/sendEmail.js";
 import createNotification from "../utils/createNotification.js";
 
-const TRIPGUARD_FEE_RATE = 10;
+const TRIPGUARD_FEE_RATE = 5; // 5% service fee
 
 /*
  * ==================================================
