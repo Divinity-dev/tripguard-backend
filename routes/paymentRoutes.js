@@ -6,7 +6,6 @@ import {
   getPayment,
   getMyPayments,
   getPaymentByReference,
-  handlePaystackWebhook,
   setupOwnerPayment,
 } from "../controllers/paymentController.js";
 
@@ -14,19 +13,7 @@ import { protect } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-/*
- * ==================================================
- * PAYSTACK WEBHOOK
- * ==================================================
- *
- * This route must remain outside the protect
- * middleware because Paystack calls it directly.
- */
 
-router.post(
-  "/webhook",
-  handlePaystackWebhook
-);
 
 /*
  * ==================================================
