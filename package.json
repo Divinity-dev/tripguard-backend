@@ -1,12 +1,12 @@
 {
   "name": "tripguard-backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "TripGuard Express API",
   "main": "index.js",
   "scripts": {
-  "start": "node server.js",
-  "dev": "nodemon server.js"
-},
+    "start": "node local.js",
+    "dev": "nodemon local.js"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Divinity-dev/tripguard-backend.git"
